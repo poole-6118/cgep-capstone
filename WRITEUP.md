@@ -3,7 +3,7 @@
 **Author:** Joe Poole
 **Submission date:** 2026-08-05 (Day 1 — all four layers built and Layer 1 deployed same-day)
 **Repo:** [`github.com/poole-6118/cgep-capstone`](https://github.com/poole-6118/cgep-capstone)
-**Grading commit SHA:** `4841def957cbaf0f56fa5f6e4f6d20868da0efca` (current head of `main`). Every merge to `main` produces a fresh Cosign-signed evidence bundle in the vault under `evidence/<sha>/`; grade against whichever SHA is at HEAD when reviewed. Earlier bundles that also verify: `c04f9153252f1bea6b77dd699212d2f8248d893e` (post-writeup), `5df6bb3e2d0a72e18b66d0fd9514190cd89ba916` (first end-to-end).
+**Grading commit SHA:** grade against whichever commit is at the tip of `main` when reviewed — every merge to `main` produces a fresh Cosign-signed evidence bundle in `s3://acme-health-intake-grc-evidence-8d3b72e9/evidence/<sha>/`. Bundles known to verify: `4b685d250d012203f936706754813fcb92eb18b6`, `4841def957cbaf0f56fa5f6e4f6d20868da0efca`, `c04f9153252f1bea6b77dd699212d2f8248d893e`, `5df6bb3e2d0a72e18b66d0fd9514190cd89ba916`.
 
 ---
 
