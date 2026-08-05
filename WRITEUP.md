@@ -167,33 +167,28 @@ Every successful merge to `main` produces a signed evidence bundle in the vault.
 ### 6a. Prerequisites
 
 - `cosign` (v2.5.3, matches what the pipeline uses).
-- `aws` CLI with read access to the evidence vault, or a locally-copied bundle from the GHA artefact.
+- **No AWS credentials required.** The signed bundle is published as a GHA artefact on every green run to `main`; that's the grader's fetch path. (An identical copy also lives in the Object Lock vault — see §6f for how the pipeline pushes it there.)
 
 ### 6b. Fetch the bundle
 
+Open the [latest green run on `main`](https://github.com/poole-6118/cgep-capstone/actions/workflows/grc-gate.yml?query=branch%3Amain+is%3Asuccess) in the Actions tab, scroll to *Artifacts*, and download `evidence-<sha>`. Unzip it into a working directory:
+
 ```bash
-# Day-1 concrete values (Personal AWS sandbox 837009194688, us-east-1):
-export EVIDENCE_BUCKET='acme-health-intake-grc-evidence-8d3b72e9'
-export SHA='bd62045e53c1-day1'  # For a real merge, use the merged commit SHA.
-
-aws s3 cp "s3://${EVIDENCE_BUCKET}/evidence/${SHA}/" ./verify/ --recursive
-
-ls verify/
-# Expected:
-#   evidence.tar.gz
-#   evidence.tar.gz.sig
-#   evidence.tar.gz.cert
-#   pointer.json
+mkdir verify && cd verify
+# unzip the artefact download here — gives you:
+#   evidence-<sha>.tar.gz
+#   evidence-<sha>.tar.gz.sig
+#   evidence-<sha>.tar.gz.cert
+SHA=$(ls evidence-*.tar.gz | sed 's/evidence-\(.*\)\.tar\.gz/\1/')
 ```
 
-### 6c. Verify the bundle SHA-256 against the pointer
+### 6c. Verify the bundle SHA-256
+
+The pipeline logs the bundle sha256 to the run log (search the run for `evidence bundle sha256:`) and also writes it into `pointer.json` in the vault copy. Recompute locally to confirm the artefact hasn't been mutated in transit:
 
 ```bash
-computed=$(sha256sum verify/evidence.tar.gz | cut -d' ' -f1)
-recorded=$(jq -r .bundle_sha256 verify/pointer.json)
-echo "computed: $computed"
-echo "recorded: $recorded"
-[ "$computed" = "$recorded" ] && echo OK || { echo MISMATCH; exit 1; }
+sha256sum evidence-${SHA}.tar.gz
+# Compare against the 'evidence bundle sha256:' line in the run log.
 ```
 
 ### 6d. Verify the Cosign keyless signature
@@ -202,11 +197,11 @@ The signature was produced by `cosign sign-blob --yes --oidc-issuer=https://toke
 
 ```bash
 cosign verify-blob \
-  --certificate       verify/evidence.tar.gz.cert \
-  --signature         verify/evidence.tar.gz.sig \
+  --certificate       evidence-${SHA}.tar.gz.cert \
+  --signature         evidence-${SHA}.tar.gz.sig \
   --certificate-identity-regexp 'https://github\.com/poole-6118/cgep-capstone/.*' \
   --certificate-oidc-issuer     https://token.actions.githubusercontent.com \
-  verify/evidence.tar.gz
+  evidence-${SHA}.tar.gz
 
 # Expected: "Verified OK"
 ```
@@ -214,7 +209,7 @@ cosign verify-blob \
 ### 6e. Inspect the bundle contents
 
 ```bash
-mkdir bundle-contents && tar -xzf verify/evidence.tar.gz -C bundle-contents
+mkdir bundle-contents && tar -xzf evidence-${SHA}.tar.gz -C bundle-contents
 ls bundle-contents/
 # manifest.json
 # plan.json
@@ -233,6 +228,24 @@ jq '.[] | select(.failures | length > 0) | .failures[]' bundle-contents/policy-r
 # Expected: no output (a successful merge has an empty failures array
 # on every namespace; if there were failures the pipeline would have
 # blocked the merge before this bundle was ever produced).
+```
+
+### 6f. Object Lock retention (vault-side control)
+
+The grader-facing verification above needs no AWS access. For completeness, the vault-side retention control is implemented in [`terraform/grc_evidence_vault.tf`](./terraform/grc_evidence_vault.tf):
+
+- `aws_s3_bucket.grc_evidence.object_lock_enabled = true`
+- `aws_s3_bucket_object_lock_configuration.grc_evidence` sets a default rule of `mode = GOVERNANCE`, `days = 90`
+- Versioning is enabled (required precondition for Object Lock)
+- The bucket policy denies non-TLS access and denies uploads that don't specify `x-amz-server-side-encryption=aws:kms` with the evidence CMK
+
+The pipeline's *Upload signed bundle to evidence vault* step exercises this on every merge — the `aws s3 cp` calls succeed only because the pipeline sets the exact SSE-KMS headers the bucket policy requires. From an account with read access to `837009194688`:
+
+```bash
+aws s3api get-object-retention \
+  --bucket acme-health-intake-grc-evidence-8d3b72e9 \
+  --key evidence/<sha>/evidence.tar.gz
+# → { "Retention": { "Mode": "GOVERNANCE", "RetainUntilDate": "~90 days from upload" } }
 ```
 
 ---

@@ -10,7 +10,7 @@ Joe Poole's Certified GRC Engineer (Practitioner) capstone. Wraps the [`GRCEngCl
 
 ## Grader verification (five minutes)
 
-Everything below runs read-only and needs no AWS credentials for the core proof (only `cosign` + `sha256sum` + a downloaded bundle).
+Everything below runs read-only, from a fresh clone, with no AWS credentials required. The signed evidence bundle is published as a GitHub Actions artefact on every green run to `main`, so it downloads from the public repo in one click.
 
 ### 1. Layers exist in the repo
 
@@ -35,38 +35,39 @@ opa test policies/       # PASS: 24/24
 
 ### 4. Verify a signed evidence bundle end-to-end
 
-Bundles are named by commit SHA. Pick any `<sha>` under `s3://acme-health-intake-grc-evidence-8d3b72e9/evidence/` — the newest one belongs to the current head of `main`.
+**Grab the bundle from the latest green run** (no AWS access needed):
+
+1. Go to the [Actions tab](https://github.com/poole-6118/cgep-capstone/actions/workflows/grc-gate.yml?query=branch%3Amain+is%3Asuccess) and open the newest green run on `main`.
+2. Scroll to *Artifacts* and download `evidence-<sha>` — a zip containing `evidence-<sha>.tar.gz`, `evidence-<sha>.tar.gz.sig`, and `evidence-<sha>.tar.gz.cert`.
+3. Unzip into a working directory.
+
+Then from that directory:
 
 ```bash
-mkdir verify && cd verify
-# Grab the SHA from the current head of main:
-SHA=$(git rev-parse origin/main)
-BUCKET=acme-health-intake-grc-evidence-8d3b72e9
+SHA=$(ls evidence-*.tar.gz | sed 's/evidence-\(.*\)\.tar\.gz/\1/')
 
-aws s3 cp "s3://${BUCKET}/evidence/${SHA}/" . --recursive
-# → evidence.tar.gz, evidence.tar.gz.sig, evidence.tar.gz.cert, pointer.json
+# (a) SHA-256 matches what the pipeline recorded in the run log for the
+#     'evidence bundle sha256:' line (also mirrored in pointer.json in the vault).
+sha256sum evidence-${SHA}.tar.gz
 
-# (a) SHA-256 matches the pointer.
-computed=$(sha256sum evidence.tar.gz | cut -d' ' -f1)
-recorded=$(jq -r .bundle_sha256 pointer.json)
-[ "$computed" = "$recorded" ] && echo "sha256 OK"
-
-# (b) Cosign keyless signature verifies against Sigstore.
+# (b) Cosign keyless signature verifies against Sigstore — this is the
+#     tamper-evident guarantee. Only a signature minted by *this* repo's
+#     GHA workflow via OIDC will verify.
 cosign verify-blob \
-  --certificate evidence.tar.gz.cert \
-  --signature   evidence.tar.gz.sig \
+  --certificate evidence-${SHA}.tar.gz.cert \
+  --signature   evidence-${SHA}.tar.gz.sig \
   --certificate-identity-regexp 'https://github\.com/poole-6118/cgep-capstone/.*' \
   --certificate-oidc-issuer     https://token.actions.githubusercontent.com \
-  evidence.tar.gz
+  evidence-${SHA}.tar.gz
 # → "Verified OK"
 
-# (c) Object Lock retention holds.
-aws s3api get-object-retention --bucket "${BUCKET}" \
-  --key "evidence/${SHA}/evidence.tar.gz"
-# → GOVERNANCE mode, retain-until ~90 days out
+# (c) Inspect what got signed.
+tar tzf evidence-${SHA}.tar.gz
+# → manifest.json, plan.json, state-summary.json,
+#    policy-results.txt, policy-results.json
 ```
 
-The bundle contents (once extracted with `tar -xzf evidence.tar.gz`) include the Terraform plan JSON, a filtered state summary, `manifest.json` binding to the commit SHA, and the machine-readable `policy-results.json` from the Conftest run that gated the merge.
+**Object Lock retention** on the vault side is declared in [`terraform/grc_evidence_vault.tf`](./terraform/grc_evidence_vault.tf) (`object_lock_enabled = true`, GOVERNANCE mode, 90-day retention rule) and its enforcement is what the pipeline's `Upload signed bundle to evidence vault` step exercises on every merge. The bundle is *also* uploaded to `s3://acme-health-intake-grc-evidence-8d3b72e9/evidence/<sha>/` under Object Lock — the pipeline log shows the successful `PutObject` calls with the required `x-amz-server-side-encryption=aws:kms` header. If you happen to have read access to AWS account `837009194688`, `aws s3api get-object-retention --bucket ... --key evidence/<sha>/evidence.tar.gz` will return `Mode: GOVERNANCE` with a retain-until date ~90 days out.
 
 ### 5. OSCAL validates with `trestle`
 
