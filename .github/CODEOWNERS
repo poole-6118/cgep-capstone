@@ -1,0 +1,17 @@
+# CODEOWNERS — CGE-P Capstone
+#
+# GitHub uses this file to auto-assign review requests. Order matters:
+# the LAST matching pattern wins. See:
+# https://docs.github.com/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Everything defaults to @poole-6118.
+* @poole-6118
+
+# Sensitive surfaces — call out explicitly even though they overlap with `*`
+# so a future reviewer can see the intent when scanning.
+/.github/                @poole-6118
+/policies/               @poole-6118
+/terraform/              @poole-6118
+/oscal/                  @poole-6118
+/docs/design/            @poole-6118
+/WRITEUP.md              @poole-6118

@@ -1,0 +1,40 @@
+# EditorConfig — CGE-P Capstone
+# https://editorconfig.org
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+# Terraform / HCL — 2 spaces (Terraform's own convention).
+[*.tf]
+indent_size = 2
+
+# Rego — OPA formatter uses tabs.
+[*.rego]
+indent_style = tab
+
+# YAML — 2 spaces (spec's implicit convention).
+[*.{yml,yaml}]
+indent_size = 2
+
+# JSON — 2 spaces to match OSCAL files.
+[*.json]
+indent_size = 2
+
+# Markdown — preserve trailing whitespace (two-space line breaks are meaningful).
+[*.md]
+trim_trailing_whitespace = false
+
+# Makefile — tabs are required.
+[Makefile]
+indent_style = tab
+
+# Python — 4 spaces (PEP 8).
+[*.py]
+indent_size = 4
