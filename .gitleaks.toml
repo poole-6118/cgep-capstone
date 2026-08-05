@@ -1,0 +1,41 @@
+# gitleaks configuration for the CGE-P capstone.
+# See: https://github.com/gitleaks/gitleaks#configuration
+#
+# Baseline: extend the default gitleaks ruleset (all built-in secret
+# patterns stay active). Below, we ONLY add allowlists for the fake
+# patient IDs and synthetic UUIDs used in policy test fixtures and
+# example JSON in docs.
+#
+# If you need to add a real allowlist entry, be conservative and
+# document why in a comment.
+
+[extend]
+useDefault = true
+
+# ------------------------------------------------------------------
+# Allowlists
+# ------------------------------------------------------------------
+
+[allowlist]
+description = "Allow synthetic patient IDs and AWS-example account IDs used in fixtures/docs"
+
+# Fake patient IDs (P-0001, P-00042, etc.) used in WORKLOAD.md and test
+# fixtures. Pattern intentionally narrow.
+regexTarget = "match"
+regexes = [
+  '''P-\d{4,6}''',                                        # patient IDs
+  '''arn:aws:kms:us-east-1:111122223333:key/[a-z0-9-]+''',# example KMS ARNs (111122223333 is AWS's canonical example account)
+  '''arn:aws:s3:::acme-uploads''',                        # example S3 ARNs
+  '''submission_id.*[0-9a-f-]{36}''',                     # UUID example in JSON docs
+]
+
+# Paths where allowlist entries above apply. Kept scoped so gitleaks
+# still enforces real secret detection everywhere else.
+paths = [
+  '''policies/.*_test\.rego''',
+  '''oscal/.*\.json''',
+  '''docs/.*\.md''',
+  '''WORKLOAD\.md''',
+  '''README\.md''',
+  '''terraform/bad_example\.tf''',
+]

@@ -1,0 +1,56 @@
+# pre-commit hooks for the CGE-P capstone.
+# Install: `pip install pre-commit && pre-commit install`
+# Run against all files: `pre-commit run --all-files`
+#
+# All revs are pinned. Rotate quarterly (or on any upstream advisory).
+
+repos:
+  # --- General hygiene ---
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+      - id: check-json
+      - id: check-yaml
+        args: ["--unsafe"]  # allow tags like !Ref in future CFN files
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+      - id: trailing-whitespace
+
+  # --- Secret scanning ---
+  # gitleaks catches accidental commits of AWS keys, JWTs, GH tokens, etc.
+  # Config in .gitleaks.toml allows the fake patient IDs used in
+  # policy test fixtures (P-0001, P-00042, submission_id UUIDs).
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.29.1
+    hooks:
+      - id: gitleaks
+
+  # --- Terraform ---
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.99.5
+    hooks:
+      - id: terraform_fmt
+      - id: terraform_validate
+
+  # --- Rego / OPA ---
+  # opa fmt-check on every commit; opa test is run in CI (see grc-gate.yml).
+  - repo: local
+    hooks:
+      - id: opa-fmt
+        name: opa fmt (check)
+        entry: bash -c 'opa fmt --list --fail $(git ls-files "policies/**/*.rego")'
+        language: system
+        pass_filenames: false
+        files: ^policies/.*\.rego$
+
+  # --- Prettier for JSON (OSCAL files) ---
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v4.0.0-alpha.8
+    hooks:
+      - id: prettier
+        files: ^(oscal/.*\.json|\.github/.*\.(yml|yaml|json))$
+        args: ["--print-width=120"]
