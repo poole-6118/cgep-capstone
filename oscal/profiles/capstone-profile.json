@@ -1,0 +1,48 @@
+{
+  "profile": {
+    "uuid": "476724b4-5853-400b-aaa3-3daa8fc2b878",
+    "metadata": {
+      "title": "CGE-P Capstone Profile — Patient Intake API (SOC 2 TSC baseline)",
+      "published": "2026-08-05T00:00:00Z",
+      "last-modified": "2026-08-05T00:00:00Z",
+      "version": "0.1.0",
+      "oscal-version": "1.1.2",
+      "roles": [
+        { "id": "grc-engineer", "title": "GRC Engineer" }
+      ]
+    },
+    "imports": [
+      {
+        "href": "https://raw.githubusercontent.com/grcwarlock/oscal-catalog-library/ea49c4c05c8c62098b3766fd8f26b862fb5181f4/soc2-oscal/catalog/catalog.json",
+        "include-controls": [
+          {
+            "with-ids": [
+              "cc6-1",
+              "cc6-3",
+              "cc6-6",
+              "cc6-7",
+              "cc7-2",
+              "cc8-1",
+              "a1-2"
+            ]
+          }
+        ]
+      }
+    ],
+    "merge": {
+      "as-is": true
+    },
+    "back-matter": {
+      "resources": [
+        {
+          "uuid": "84c8bbc8-2fa0-4432-b039-c7c7d290ce52",
+          "title": "SOC 2 TSC catalog (pin)",
+          "description": "Same pin as the component-definition. Rationale in oscal/README.md.",
+          "rlinks": [
+            { "href": "https://raw.githubusercontent.com/grcwarlock/oscal-catalog-library/ea49c4c05c8c62098b3766fd8f26b862fb5181f4/soc2-oscal/catalog/catalog.json" }
+          ]
+        }
+      ]
+    }
+  }
+}
