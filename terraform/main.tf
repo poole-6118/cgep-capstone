@@ -13,6 +13,18 @@ terraform {
     random  = { source = "hashicorp/random", version = "~> 3.6" }
     archive = { source = "hashicorp/archive", version = "~> 2.4" }
   }
+
+  # Remote state backend — S3 with server-side encryption, versioning,
+  # and DynamoDB-based state locking. Removes the "local state" honest
+  # gap from WRITEUP.md §7 and lets the GHA pipeline apply against the
+  # same state as local runs.
+  backend "s3" {
+    bucket         = "acme-health-cgep-tfstate-8d3b72e9"
+    key            = "state/patient-intake.tfstate"
+    region         = "us-east-1"
+    dynamodb_table = "acme-health-cgep-tflocks"
+    encrypt        = true
+  }
 }
 
 provider "aws" {
