@@ -1,0 +1,233 @@
+{
+  "component-definition": {
+    "uuid": "569e92ba-464c-4b28-8711-4b03c39216c2",
+    "metadata": {
+      "title": "Patient Intake API — CGE-P Capstone Component Definition",
+      "published": "2026-08-05T00:00:00Z",
+      "last-modified": "2026-08-05T00:00:00Z",
+      "version": "0.1.0",
+      "oscal-version": "1.1.2",
+      "roles": [
+        { "id": "grc-engineer",       "title": "GRC Engineer (author of this component)" },
+        { "id": "workload-owner",     "title": "Workload Owner — Acme Health engineering" },
+        { "id": "auditor",            "title": "SOC 2 Type II Auditor (external)" }
+      ],
+      "parties": [
+        {
+          "uuid": "5b3f0cdc-e2dc-459e-9030-e35ff4fab856",
+          "type": "person",
+          "name": "Joe Poole",
+          "email-addresses": ["poole-6118@users.noreply.github.com"]
+        },
+        {
+          "uuid": "2946244e-de1c-45ac-98b5-b8f2d35c2d40",
+          "type": "organization",
+          "name": "Acme Health (fictional workload owner)"
+        }
+      ],
+      "responsible-parties": [
+        { "role-id": "grc-engineer",   "party-uuids": ["5b3f0cdc-e2dc-459e-9030-e35ff4fab856"] },
+        { "role-id": "workload-owner", "party-uuids": ["2946244e-de1c-45ac-98b5-b8f2d35c2d40"] }
+      ]
+    },
+    "components": [
+      {
+        "uuid": "496477c4-a53c-4cc6-bcd1-5ec6cf517a74",
+        "type": "service",
+        "title": "Patient Intake API (governed)",
+        "description": "The starter Patient Intake API (VPC + Lambda + API Gateway v2 + DynamoDB + S3) after the four CGE-P layers have been applied. This component-definition asserts, for each SOC 2 TSC control in scope, which Terraform resource and Rego policy pair implements the control and where the Cosign-signed evidence lands.",
+        "purpose": "Ingest patient intake submissions (PHI) over HTTPS and persist them to DynamoDB and S3 under customer-managed KMS keys, with a continuous evidence trail suitable for SOC 2 Type II attestation.",
+        "props": [
+          { "name": "framework-primary",   "value": "soc2" },
+          { "name": "framework-secondary", "value": "hipaa,cmmc-l2" },
+          { "name": "workload-type",       "value": "phi-handling-api" },
+          { "name": "cloud-provider",      "value": "aws" },
+          { "name": "region",              "value": "us-east-1" }
+        ],
+        "links": [
+          {
+            "href": "https://github.com/poole-6118/cgep-capstone/blob/main/WORKLOAD.md",
+            "rel": "reference",
+            "text": "Workload description"
+          },
+          {
+            "href": "https://github.com/poole-6118/cgep-capstone/blob/main/docs/design/00-framework-choice.md",
+            "rel": "reference",
+            "text": "Framework choice rationale (SOC 2 Type II)"
+          }
+        ],
+        "responsible-roles": [
+          { "role-id": "grc-engineer",   "party-uuids": ["5b3f0cdc-e2dc-459e-9030-e35ff4fab856"] },
+          { "role-id": "workload-owner", "party-uuids": ["2946244e-de1c-45ac-98b5-b8f2d35c2d40"] }
+        ],
+        "control-implementations": [
+          {
+            "uuid": "82422be6-ca5c-4f77-9a2b-addb2c39796a",
+            "source": "https://raw.githubusercontent.com/grcwarlock/oscal-catalog-library/ea49c4c05c8c62098b3766fd8f26b862fb5181f4/soc2-oscal/catalog/catalog.json",
+            "description": "SOC 2 Type II Trust Services Criteria (2022) — community OSCAL catalog, pinned at commit ea49c4c05c8c62098b3766fd8f26b862fb5181f4. See oscal/README.md for pin rationale and fallback plan.",
+            "props": [
+              { "name": "catalog-title",   "value": "SOC 2 Type II Trust Services Criteria" },
+              { "name": "catalog-version", "value": "2022" },
+              { "name": "catalog-pin",     "value": "grcwarlock/oscal-catalog-library@ea49c4c05c8c62098b3766fd8f26b862fb5181f4" }
+            ],
+            "implemented-requirements": [
+              {
+                "uuid": "ddde187f-7921-42f9-92f5-7a1310a6fe55",
+                "control-id": "cc6-1",
+                "description": "**CC6.1 — Logical access controls.** All PHI-bearing data stores are encrypted at rest with a customer-managed KMS key (CMK). Terraform provisions `aws_kms_key.data` and wires it into `terraform/main.tf:aws_dynamodb_table.intake` (via `server_side_encryption { enabled = true, kms_key_arn = aws_kms_key.data.arn }`) and `terraform/main.tf:aws_s3_bucket.uploads` (via a companion `aws_s3_bucket_server_side_encryption_configuration.uploads` with `sse_algorithm = \"aws:kms\"`). The Rego policy `policies/soc2/cc6/kms_on_data_stores.rego` fails the CI pipeline if any bucket or table is planned without a CMK reference. Closes GAP-01 and GAP-02.",
+                "props": [
+                  { "name": "hipaa", "value": "164.312(a)(2)(iv)" },
+                  { "name": "hipaa", "value": "164.312(e)(2)(ii)" },
+                  { "name": "cmmc",  "value": "SC.L2-3.13.11" },
+                  { "name": "cmmc",  "value": "SC.L2-3.13.16" },
+                  { "name": "gap",   "value": "GAP-01" },
+                  { "name": "gap",   "value": "GAP-02" },
+                  { "name": "implementation-status", "value": "implemented" }
+                ],
+                "links": [
+                  { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/terraform/main.tf",                                  "rel": "implementation", "text": "Terraform: aws_dynamodb_table.intake, aws_s3_bucket.uploads" },
+                  { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/policies/soc2/cc6/kms_on_data_stores.rego",           "rel": "test",           "text": "Rego policy" },
+                  { "href": "s3://acme-health-evidence-vault-<suffix>/evidence/<commit-sha>/evidence.tar.gz",                            "rel": "evidence",       "text": "Signed evidence bundle (per-merge)" }
+                ]
+              },
+              {
+                "uuid": "7ccedc23-e90d-4d54-9f0f-d9c77f6a666c",
+                "control-id": "cc6-3",
+                "description": "**CC6.3 — Authorization: least privilege.** The Lambda execution role's inline policy is scoped to enumerated actions on specific resource ARNs (never `*:*`). Terraform tightens `terraform/main.tf:aws_iam_role_policy.lambda_inline` to `{dynamodb:PutItem, dynamodb:GetItem}` on the intake table ARN and `{s3:PutObject, s3:GetObject}` on the uploads bucket ARN. The Rego policy `policies/soc2/cc6/least_priv_iam.rego` denies any IAM policy containing `Action:\"*\"` or a service-wildcard like `dynamodb:*`. Closes GAP-07.",
+                "props": [
+                  { "name": "hipaa", "value": "164.312(a)(1)" },
+                  { "name": "hipaa", "value": "164.308(a)(4)(ii)(B)" },
+                  { "name": "cmmc",  "value": "AC.L2-3.1.5" },
+                  { "name": "cmmc",  "value": "AC.L2-3.1.6" },
+                  { "name": "gap",   "value": "GAP-07" },
+                  { "name": "implementation-status", "value": "implemented" }
+                ],
+                "links": [
+                  { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/terraform/main.tf",                              "rel": "implementation", "text": "Terraform: aws_iam_role_policy.lambda_inline" },
+                  { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/policies/soc2/cc6/least_priv_iam.rego",           "rel": "test",           "text": "Rego policy" },
+                  { "href": "s3://acme-health-evidence-vault-<suffix>/evidence/<commit-sha>/evidence.tar.gz",                       "rel": "evidence",       "text": "Signed evidence bundle" }
+                ]
+              },
+              {
+                "uuid": "bca65190-6c66-46da-91b3-f66fe085646a",
+                "control-id": "cc6-6",
+                "description": "**CC6.6 — Boundary protection.** The Lambda function runs inside the workload VPC's private subnets. Terraform adds `vpc_config { subnet_ids = aws_subnet.private[*].id, security_group_ids = [aws_security_group.lambda.id] }` to `terraform/main.tf:aws_lambda_function.intake`. The security group's egress is scoped to VPC endpoints only (S3 gateway endpoint + DynamoDB gateway endpoint). The Rego policy `policies/soc2/cc6/lambda_in_vpc.rego` fails the plan if any Lambda has an empty `vpc_config`. Closes GAP-05.",
+                "props": [
+                  { "name": "hipaa", "value": "164.312(e)(1)" },
+                  { "name": "hipaa", "value": "164.308(a)(4)" },
+                  { "name": "cmmc",  "value": "SC.L2-3.13.1" },
+                  { "name": "cmmc",  "value": "SC.L2-3.13.5" },
+                  { "name": "gap",   "value": "GAP-05" },
+                  { "name": "implementation-status", "value": "implemented" }
+                ],
+                "links": [
+                  { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/terraform/main.tf",                          "rel": "implementation", "text": "Terraform: aws_lambda_function.intake vpc_config" },
+                  { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/policies/soc2/cc6/lambda_in_vpc.rego",       "rel": "test",           "text": "Rego policy" },
+                  { "href": "s3://acme-health-evidence-vault-<suffix>/evidence/<commit-sha>/evidence.tar.gz",                   "rel": "evidence",       "text": "Signed evidence bundle" }
+                ]
+              },
+              {
+                "uuid": "b22acb78-74ca-4ade-8a1f-792c6749e51c",
+                "control-id": "cc6-7",
+                "description": "**CC6.7 — Transmission security.** Every S3 bucket (uploads + evidence vault) has a companion `aws_s3_bucket_policy` denying requests where `aws:SecureTransport=false`. Terraform provisions these as `terraform/main.tf:aws_s3_bucket_policy.uploads_tls_only` and `terraform/grc_evidence.tf:aws_s3_bucket_policy.evidence_tls_only`. In transit, the API Gateway v2 stage's DNS-facing endpoint is HTTPS-only (AWS-managed). The Rego policy `policies/soc2/cc6/tls_only_bucket_policy.rego` fails the plan if any bucket is missing its TLS-only policy. Closes GAP-03.",
+                "props": [
+                  { "name": "hipaa", "value": "164.312(e)(1)" },
+                  { "name": "hipaa", "value": "164.312(e)(2)(i)" },
+                  { "name": "cmmc",  "value": "SC.L2-3.13.8" },
+                  { "name": "gap",   "value": "GAP-03" },
+                  { "name": "implementation-status", "value": "implemented" }
+                ],
+                "links": [
+                  { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/terraform/main.tf",                                  "rel": "implementation", "text": "Terraform: aws_s3_bucket_policy.uploads_tls_only" },
+                  { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/policies/soc2/cc6/tls_only_bucket_policy.rego",       "rel": "test",           "text": "Rego policy" },
+                  { "href": "s3://acme-health-evidence-vault-<suffix>/evidence/<commit-sha>/evidence.tar.gz",                            "rel": "evidence",       "text": "Signed evidence bundle" }
+                ]
+              },
+              {
+                "uuid": "84c01b0b-ba70-4922-9d7d-d52b45b44ced",
+                "control-id": "cc7-2",
+                "description": "**CC7.2 — System monitoring: detection.** Three detection surfaces are provisioned: (1) `terraform/grc_cloudtrail.tf:aws_cloudtrail.governance` — multi-region trail with `enable_log_file_validation = true`, logs to a dedicated KMS-encrypted S3 bucket with lifecycle to Glacier at 90 days; (2) `terraform/main.tf:aws_apigatewayv2_stage.default` gets an `access_log_settings` block writing to a CloudWatch log group; (3) `terraform/main.tf:aws_lambda_function.intake` gets `dead_letter_config { target_arn = aws_sqs_queue.dlq.arn }` and `tracing_config { mode = \"Active\" }` (X-Ray). The Rego policy `policies/soc2/cc7/detection_enabled.rego` denies the plan if any of the three is missing or weaker than required. Closes GAP-06 and GAP-08.",
+                "props": [
+                  { "name": "hipaa", "value": "164.312(b)" },
+                  { "name": "hipaa", "value": "164.308(a)(1)(ii)(D)" },
+                  { "name": "cmmc",  "value": "AU.L2-3.3.1" },
+                  { "name": "cmmc",  "value": "SI.L2-3.14.6" },
+                  { "name": "cmmc",  "value": "SI.L2-3.14.7" },
+                  { "name": "gap",   "value": "GAP-06" },
+                  { "name": "gap",   "value": "GAP-08" },
+                  { "name": "implementation-status", "value": "implemented" }
+                ],
+                "links": [
+                  { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/terraform/main.tf",                                  "rel": "implementation", "text": "Terraform: aws_cloudtrail.governance, aws_apigatewayv2_stage.default, aws_lambda_function.intake" },
+                  { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/policies/soc2/cc7/detection_enabled.rego",           "rel": "test",           "text": "Rego policy" },
+                  { "href": "s3://acme-health-evidence-vault-<suffix>/evidence/<commit-sha>/evidence.tar.gz",                          "rel": "evidence",       "text": "Signed evidence bundle" }
+                ]
+              },
+              {
+                "uuid": "658a7aa5-27e7-4e78-a0b3-313b67bdeb55",
+                "control-id": "cc8-1",
+                "description": "**CC8.1 — Change management.** Every change to the workload lands via a pull request that is gated by `.github/workflows/grc-gate.yml`. The gate runs `terraform plan`, then `opa test policies/` (policy suite unit tests), then `conftest test --all-namespaces --parser json --policy policies/ plan.json`. Any policy deny causes the pipeline to fail and blocks merge. On successful merge to `main`, the pipeline applies the plan and produces a Cosign-signed evidence bundle uploaded to the Object Lock evidence vault. The bundle contains the plan, filtered state summary, policy results, and a manifest binding the commit SHA. This is the primary CC8.1 evidence surface — every merged change has a signed, WORM-retained artefact proving what changed and that the gate passed. Cross-cutting; no single Terraform resource address applies.",
+                "props": [
+                  { "name": "hipaa", "value": "164.308(a)(1)(i)" },
+                  { "name": "cmmc",  "value": "CM.L2-3.4.3" },
+                  { "name": "cmmc",  "value": "CM.L2-3.4.4" },
+                  { "name": "implementation-status", "value": "implemented" }
+                ],
+                "links": [
+                  { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/.github/workflows/grc-gate.yml", "rel": "implementation", "text": "GHA workflow: grc-gate" },
+                  { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/policies/",                     "rel": "test",           "text": "Rego policy suite (all controls)" },
+                  { "href": "s3://acme-health-evidence-vault-<suffix>/evidence/<commit-sha>/evidence.tar.gz",     "rel": "evidence",       "text": "Signed evidence bundle" },
+                  { "href": "s3://acme-health-evidence-vault-<suffix>/evidence/<commit-sha>/pointer.json",       "rel": "evidence",       "text": "Evidence bundle pointer (commit \u2192 S3 URIs)" }
+                ]
+              },
+              {
+                "uuid": "8397a79d-40fd-45e2-85f1-8e78f5da4e36",
+                "control-id": "a1-2",
+                "description": "**A1.2 — Availability: backups and recovery.** The evidence vault S3 bucket has both versioning enabled and Object Lock in Compliance mode with a default retention of 365 days. Terraform provisions `terraform/grc_evidence.tf:aws_s3_bucket.evidence` (with `object_lock_enabled = true`), `aws_s3_bucket_versioning.evidence` (`status = \"Enabled\"`), and `aws_s3_bucket_object_lock_configuration.evidence` (`rule.default_retention.days = 365`, `mode = \"COMPLIANCE\"`). The uploads bucket also has versioning enabled. The Rego policy `policies/soc2/a1/object_lock_and_versioning.rego` fails the plan if the evidence bucket lacks either. Closes GAP-04.",
+                "props": [
+                  { "name": "hipaa", "value": "164.308(a)(7)(i)" },
+                  { "name": "hipaa", "value": "164.308(a)(7)(ii)(A)" },
+                  { "name": "cmmc",  "value": "MP.L2-3.8.9" },
+                  { "name": "gap",   "value": "GAP-04" },
+                  { "name": "implementation-status", "value": "implemented" }
+                ],
+                "links": [
+                  { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/terraform/grc_evidence.tf",                             "rel": "implementation", "text": "Terraform: evidence vault (versioning + Object Lock)" },
+                  { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/policies/soc2/a1/object_lock_and_versioning.rego",       "rel": "test",           "text": "Rego policy" },
+                  { "href": "s3://acme-health-evidence-vault-<suffix>/evidence/<commit-sha>/evidence.tar.gz",                              "rel": "evidence",       "text": "Signed evidence bundle" }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "back-matter": {
+      "resources": [
+        {
+          "uuid": "c9a7a0f1-7948-4eca-8004-b6ca0c9eea10",
+          "title": "SOC 2 TSC OSCAL catalog (pinned)",
+          "description": "Community-maintained OSCAL 1.1.2 catalog for the SOC 2 Type II Trust Services Criteria (2022). Pinned at grcwarlock/oscal-catalog-library@ea49c4c05c8c62098b3766fd8f26b862fb5181f4.",
+          "rlinks": [
+            { "href": "https://raw.githubusercontent.com/grcwarlock/oscal-catalog-library/ea49c4c05c8c62098b3766fd8f26b862fb5181f4/soc2-oscal/catalog/catalog.json" }
+          ]
+        },
+        {
+          "uuid": "d69caee5-f6a6-4bcf-aaf4-ff126d73fca4",
+          "title": "Capstone framework choice",
+          "description": "Rationale for choosing SOC 2 Type II as the primary framework for this component.",
+          "rlinks": [
+            { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/docs/design/00-framework-choice.md" }
+          ]
+        },
+        {
+          "uuid": "521f3988-eaca-4503-ad53-25dd592d7c35",
+          "title": "Capstone build plan",
+          "rlinks": [
+            { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/docs/design/01-capstone-plan.md" }
+          ]
+        }
+      ]
+    }
+  }
+}
