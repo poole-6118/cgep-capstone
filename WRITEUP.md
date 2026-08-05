@@ -1,9 +1,9 @@
 # CGE-P Capstone Write-Up — Patient Intake API, governed for SOC 2 Type II
 
 **Author:** Joe Poole
-**Submission date:** `<PLACEHOLDER: submission date>`
+**Submission date:** 2026-08-05 (Day 1 — all four layers built and Layer 1 deployed same-day)
 **Repo:** [`github.com/poole-6118/cgep-capstone`](https://github.com/poole-6118/cgep-capstone)
-**Grading commit SHA:** `<PLACEHOLDER: final main commit SHA>`
+**Grading commit SHA:** _to be set after final merge_ (current head of `writeup/final`: see PR #8; Layer 1 deployed at commit `64bbb37` on branch `layer1/terraform-baseline`, PR #9)
 
 ---
 
@@ -110,7 +110,15 @@ Each row is one SOC 2 TSC control × the layers that implement it × the artefac
 | **A1.2**  | `terraform/grc_evidence_vault.tf:aws_s3_bucket.evidence`, `aws_s3_bucket_object_lock_configuration.evidence`, `aws_s3_bucket_versioning.evidence` | `policies/soc2/a1/object_lock_and_versioning.rego` | `8397a79d-40fd-45e2-85f1-8e78f5da4e36` | `s3://<vault>/evidence/<sha>/evidence.tar.gz` |
 
 `<vault>` = the Terraform-generated bucket name (`acme-health-evidence-vault-<random-suffix>`).
-`<sha>` = the merged commit SHA. `<PLACEHOLDER: substitute the concrete values after Layer 1 deploys>`.
+`<sha>` = the merged commit SHA. Concrete values from the Day-1 deploy (2026-08-05):
+
+- **Evidence vault:** `acme-health-evidence-vault-<suffix>` → `acme-health-intake-grc-evidence-8d3b72e9`
+- **Data-at-rest CMK:** `arn:aws:kms:us-east-1:837009194688:key/1f868767-504a-4ab5-a6a0-1c7839956a40`
+- **Evidence CMK:** `arn:aws:kms:us-east-1:837009194688:key/401dec1f-c807-4268-bc59-98b7e936f58c`
+- **CloudTrail:** `arn:aws:cloudtrail:us-east-1:837009194688:trail/acme-health-intake-grc-trail`
+- **Day-1 bundle:** `s3://acme-health-intake-grc-evidence-8d3b72e9/evidence/day1/evidence-bd62045e53c1-day1.tar.gz`
+  - SHA-256: `a4b99e105a92a645f49c03e6321c4ac7520670da0fa59adead7b36253c44ebaf`
+  - Object Lock retain-until: `2026-11-03T02:08:21Z` (GOVERNANCE mode, 90 days)
 
 ---
 
@@ -119,8 +127,23 @@ Each row is one SOC 2 TSC control × the layers that implement it × the artefac
 ### 5a. Green PR — compliant plan passes the gate
 
 - **PR:** [poole-6118/cgep-capstone#4](https://github.com/poole-6118/cgep-capstone/pull/4) — *layer2: SOC 2 TSC Rego policy suite with test fixtures*.
-- **Gate check run:** `<PLACEHOLDER: link to the successful grc-gate run on PR #4 head, once Layer 1 lands>`.
-- **What it proves:** With Layer 1's Terraform in the tree, `terraform show -json plan.tfplan | conftest test --all-namespaces --parser json --policy policies/` returns **zero denies**. `opa test policies/` passes 24/24 unit tests. This is the "compliant plan → gate green" side of the demonstration.
+- **Local verification (2026-08-05, before pipeline first run):** running the exact commands the pipeline would run, against the plan produced by Layer 1's Terraform (branch `layer1/terraform-baseline`, commit `64bbb37`):
+  ```
+  $ opa test policies/
+  PASS: 24/24
+
+  $ conftest test --parser json --policy policies/soc2 \
+      --namespace soc2.cc6.kms_on_data_stores \
+      --namespace soc2.cc6.tls_only_bucket_policy \
+      --namespace soc2.cc6.least_priv_iam \
+      --namespace soc2.cc6.lambda_in_vpc \
+      --namespace soc2.cc7.detection_enabled \
+      --namespace soc2.a1.object_lock_and_versioning \
+      terraform-plan.json
+  22 tests, 22 passed, 0 warnings, 0 failures, 0 exceptions
+  ```
+- **Gate check run:** _to be linked after the pipeline first runs on the merged tree (post PR-#5 merge)_.
+- **What it proves:** With Layer 1's Terraform in the tree, the policy gate returns **zero denies** on a real Terraform plan. `opa test policies/` passes 24/24 unit tests. This is the "compliant plan → gate green" side of the demonstration.
 
 ### 5b. Red PR — non-compliant plan is blocked
 
@@ -149,8 +172,9 @@ Every successful merge to `main` produces a signed evidence bundle in the vault.
 ### 6b. Fetch the bundle
 
 ```bash
-export EVIDENCE_BUCKET='<PLACEHOLDER: acme-health-evidence-vault-<suffix>>'
-export SHA='<PLACEHOLDER: the merged commit SHA to verify>'
+# Day-1 concrete values (Personal AWS sandbox 837009194688, us-east-1):
+export EVIDENCE_BUCKET='acme-health-intake-grc-evidence-8d3b72e9'
+export SHA='bd62045e53c1-day1'  # For a real merge, use the merged commit SHA.
 
 aws s3 cp "s3://${EVIDENCE_BUCKET}/evidence/${SHA}/" ./verify/ --recursive
 
@@ -283,6 +307,7 @@ Pinned in [`.pre-commit-config.yaml`](./.pre-commit-config.yaml):
 | 2026-08-05 | PR #5 — Layer 3 GHA pipeline (`grc-gate.yml`). |
 | 2026-08-05 | PR #6 — Layer 4 OSCAL component-definition + profile. |
 | 2026-08-05 | PR #7 — Repo hygiene (pre-commit, gitleaks, CODEOWNERS, SECURITY.md, .editorconfig). |
-| 2026-08-05 | PR `<PLACEHOLDER: Layer 1 PR number>` — Terraform GRC baseline (KMS, CloudTrail, evidence vault, etc.). |
-| `<PLACEHOLDER>` | Layer 1 deployed; first evidence bundle produced; green + red PR check runs linked in §5. |
-| `<PLACEHOLDER>` | This WRITEUP.md merged and submitted. |
+| 2026-08-05 | PR #9 — Layer 1: Terraform GRC baseline + starter remediation (53 resources deployed to personal AWS 837009194688 / us-east-1; `make test` returns `received`; conftest 22/22, opa 24/24). |
+| 2026-08-05 | First signed evidence bundle produced and uploaded to the Object Lock vault: `s3://acme-health-intake-grc-evidence-8d3b72e9/evidence/day1/evidence-bd62045e53c1-day1.tar.gz` (SHA-256 `a4b99e10...c44ebaf`, retain-until 2026-11-03). |
+| _pending_ | Green + red PR check runs recorded in §5 once Layer 3 pipeline is merged to main. |
+| _pending_ | This WRITEUP.md merged and submitted for grading. |
