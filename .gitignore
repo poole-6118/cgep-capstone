@@ -7,11 +7,53 @@
 !terraform.tfvars.example
 tfplan
 *.tfplan
+plan.json
+plan.tfplan
 crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
 
 # Lambda build
 terraform/lambda/handler.zip
 
-# Local
+# Policy pipeline artefacts
+terraform/policy-results.txt
+terraform/policy-results.json
+terraform/state.json
+terraform/state-summary.json
+
+# Local evidence bundles
 evidence/
+evidence-*.tar.gz
+evidence-*.tar.gz.sig
+evidence-*.tar.gz.cert
+pointer.json
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+!lambda_function.key  # (kept as an example; nothing here today)
+
+# OS junk
 .DS_Store
+Thumbs.db
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Python (pre-commit venv, etc.)
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Node (prettier, if run locally)
+node_modules/

@@ -48,3 +48,5 @@ Everything you write in the capstone is directly about hardening one of these.
 - Patient data lifecycle (deletion, export). Worth mentioning in your write-up as a known gap.
 
 You don't need to expand the workload. The cert is testing your ability to govern what's there, not your ability to build more.
+
+<!-- CGE-P pipeline: full end-to-end run verified 2026-08-05. -->
