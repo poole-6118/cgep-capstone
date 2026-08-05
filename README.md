@@ -35,11 +35,12 @@ opa test policies/       # PASS: 24/24
 
 ### 4. Verify a signed evidence bundle end-to-end
 
-Bundles are named by commit SHA. This example uses the writeup-merge SHA `c04f9153252f1bea6b77dd699212d2f8248d893e`.
+Bundles are named by commit SHA. Pick any `<sha>` under `s3://acme-health-intake-grc-evidence-8d3b72e9/evidence/` — the newest one belongs to the current head of `main`.
 
 ```bash
 mkdir verify && cd verify
-SHA=c04f9153252f1bea6b77dd699212d2f8248d893e
+# Grab the SHA from the current head of main:
+SHA=$(git rev-parse origin/main)
 BUCKET=acme-health-intake-grc-evidence-8d3b72e9
 
 aws s3 cp "s3://${BUCKET}/evidence/${SHA}/" . --recursive
