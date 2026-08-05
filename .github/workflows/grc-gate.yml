@@ -312,13 +312,20 @@ jobs:
           head -c 80 evidence-${{ github.sha }}.tar.gz.sig; echo
 
       - name: Upload signed bundle to evidence vault
+        # The vault bucket policy REQUIRES an explicit x-amz-server-side-encryption
+        # header of aws:kms plus the specific evidence CMK. Default bucket encryption
+        # doesn't satisfy this because the deny checks the request header, not the
+        # resulting encryption state.
+        env:
+          EVIDENCE_KMS_KEY_ARN: arn:aws:kms:us-east-1:837009194688:key/401dec1f-c807-4268-bc59-98b7e936f58c
         run: |
           set -euo pipefail
           : "${EVIDENCE_BUCKET:?EVIDENCE_BUCKET secret is required}"
           prefix="evidence/${{ github.sha }}"
-          aws s3 cp evidence-${{ github.sha }}.tar.gz       "s3://${EVIDENCE_BUCKET}/${prefix}/evidence.tar.gz"
-          aws s3 cp evidence-${{ github.sha }}.tar.gz.sig   "s3://${EVIDENCE_BUCKET}/${prefix}/evidence.tar.gz.sig"
-          aws s3 cp evidence-${{ github.sha }}.tar.gz.cert  "s3://${EVIDENCE_BUCKET}/${prefix}/evidence.tar.gz.cert"
+          SSE=(--sse aws:kms --sse-kms-key-id "${EVIDENCE_KMS_KEY_ARN}")
+          aws s3 cp "${SSE[@]}" evidence-${{ github.sha }}.tar.gz       "s3://${EVIDENCE_BUCKET}/${prefix}/evidence.tar.gz"
+          aws s3 cp "${SSE[@]}" evidence-${{ github.sha }}.tar.gz.sig   "s3://${EVIDENCE_BUCKET}/${prefix}/evidence.tar.gz.sig"
+          aws s3 cp "${SSE[@]}" evidence-${{ github.sha }}.tar.gz.cert  "s3://${EVIDENCE_BUCKET}/${prefix}/evidence.tar.gz.cert"
           # Small metadata pointer so an auditor can find the artefacts
           # by commit SHA alone.
           cat > pointer.json <<EOF
@@ -333,7 +340,7 @@ jobs:
             "bundle_sha256": "${{ steps.bundle.outputs.bundle_sha }}"
           }
           EOF
-          aws s3 cp pointer.json "s3://${EVIDENCE_BUCKET}/${prefix}/pointer.json"
+          aws s3 cp "${SSE[@]}" pointer.json "s3://${EVIDENCE_BUCKET}/${prefix}/pointer.json"
 
       - name: Retain signed bundle as GHA artefact (grader convenience)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
