@@ -111,30 +111,36 @@ resource "aws_dynamodb_table" "intake" {
     type = "S"
   }
 
-  # No server_side_encryption block. Defaults to AWS-owned key.
-  # GAP-02: capstone learner expected to add this with a customer-owned key.
+  # GAP-02 remediated: SSE with customer-managed KMS key.
+  # Key defined in grc_kms.tf (aws_kms_key.data_at_rest).
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = aws_kms_key.data_at_rest.arn
+  }
+
+  # A1.2 support: continuous backups (35-day PITR window).
+  point_in_time_recovery {
+    enabled = true
+  }
 }
 
 ######################################################################
 # S3 — uploads bucket.
-# GAP-01: relies on AWS-managed SSE-S3 (default since 2023) instead of
-#         SSE-KMS with a customer CMK. PHI keys are not under customer
-#         custody.
-# GAP-03: no bucket policy denying non-TLS requests
-#         (aws:SecureTransport).
-# GAP-04: no versioning. PHI overwrites are unrecoverable.
 #
-# Note: AWS now defaults new buckets to SSE-S3 + full public access block.
-# The "gaps" here are real residual gaps once those defaults are in place.
+# Original starter gaps (all remediated in Layer 1):
+#   GAP-01: SSE-KMS with customer CMK          → grc_remediation_uploads.tf
+#   GAP-03: TLS-only bucket policy             → grc_remediation_uploads.tf
+#   GAP-04: versioning                          → grc_remediation_uploads.tf
+#
+# Kept the bare bucket resource here to minimize the diff against the
+# original starter and to make the "remediation as sibling resources"
+# pattern visible to the reader.
 ######################################################################
 
 resource "aws_s3_bucket" "uploads" {
-  bucket = "${local.name_prefix}-uploads-${local.suffix}"
+  bucket        = "${local.name_prefix}-uploads-${local.suffix}"
+  force_destroy = true # capstone teardown; a production deployment would leave this false
 }
-
-# (Intentionally omitted: SSE-KMS encryption with a customer CMK,
-#  bucket policy enforcing aws:SecureTransport, versioning, lifecycle.
-#  These are the gaps the learner closes.)
 
 ######################################################################
 # Lambda — the intake handler.
@@ -167,7 +173,9 @@ resource "aws_iam_role_policy_attachment" "lambda_basic" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-# GAP-07: deliberately broad permissions on the workload data stores.
+# GAP-07 remediated: least-privilege IAM — only the specific actions the
+# Lambda actually needs on the two named resources, plus KMS for the
+# data-at-rest CMK.
 resource "aws_iam_role_policy" "lambda_inline" {
   name = "intake-data-access"
   role = aws_iam_role.lambda.id
@@ -176,17 +184,66 @@ resource "aws_iam_role_policy" "lambda_inline" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = "dynamodb:*"
+        Sid    = "DynamoDBWriteOwnItem"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:PutItem",
+          "dynamodb:GetItem",
+          "dynamodb:UpdateItem",
+        ]
         Resource = aws_dynamodb_table.intake.arn
       },
       {
+        Sid    = "S3PutIntakeUpload"
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject",
+          "s3:GetObject",
+        ]
+        Resource = "${aws_s3_bucket.uploads.arn}/*"
+      },
+      {
+        Sid    = "KMSEncryptDecryptDataAtRest"
+        Effect = "Allow"
+        Action = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:DescribeKey",
+        ]
+        Resource = aws_kms_key.data_at_rest.arn
+      },
+      {
+        # Lambda needs to write to its own ENIs when in a VPC (GAP-05
+        # remediation). Managed policy AWSLambdaVPCAccessExecutionRole
+        # is the AWS-blessed way; attached via aws_iam_role_policy_attachment.
+        Sid      = "SQSSendToDLQ"
         Effect   = "Allow"
-        Action   = "s3:*"
-        Resource = ["${aws_s3_bucket.uploads.arn}", "${aws_s3_bucket.uploads.arn}/*"]
+        Action   = "sqs:SendMessage"
+        Resource = aws_sqs_queue.intake_dlq.arn
       }
     ]
   })
+}
+
+# GAP-05 remediation support — Lambda needs VPC ENI create/manage perms.
+resource "aws_iam_role_policy_attachment" "lambda_vpc" {
+  role       = aws_iam_role.lambda.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+}
+
+# GAP-06 remediation support — dead-letter queue for failed invocations.
+resource "aws_sqs_queue" "intake_dlq" {
+  name                              = "${local.name_prefix}-dlq-${local.suffix}"
+  message_retention_seconds         = 1209600 # 14 days
+  kms_master_key_id                 = aws_kms_key.data_at_rest.arn
+  kms_data_key_reuse_period_seconds = 300
+
+  tags = {
+    Name    = "${local.name_prefix}-dlq"
+    Purpose = "lambda-dlq"
+  }
 }
 
 resource "aws_lambda_function" "intake" {
@@ -198,6 +255,10 @@ resource "aws_lambda_function" "intake" {
   source_code_hash = data.archive_file.handler.output_base64sha256
   timeout          = 10
 
+  # GAP-06 remediated: reserved concurrency prevents runaway costs and
+  # provides a documented throughput ceiling for capacity planning.
+  reserved_concurrent_executions = 10
+
   environment {
     variables = {
       INTAKE_TABLE  = aws_dynamodb_table.intake.name
@@ -205,8 +266,27 @@ resource "aws_lambda_function" "intake" {
     }
   }
 
-  # GAP-05: no vpc_config block. Learner expected to add one referencing
-  # aws_subnet.private[*] and a hardened security group.
+  # GAP-05 remediated: Lambda runs inside the VPC, in private subnets,
+  # with a hardened egress-only security group (see grc_security_groups.tf).
+  vpc_config {
+    subnet_ids         = aws_subnet.private[*].id
+    security_group_ids = [aws_security_group.lambda.id]
+  }
+
+  # GAP-06 remediated: dead-letter queue for failed async invocations.
+  dead_letter_config {
+    target_arn = aws_sqs_queue.intake_dlq.arn
+  }
+
+  # GAP-06 remediated: X-Ray tracing for distributed observability (CC7.2).
+  tracing_config {
+    mode = "Active"
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.lambda_vpc,
+    aws_iam_role_policy.lambda_inline,
+  ]
 }
 
 ######################################################################
@@ -237,7 +317,30 @@ resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.intake.id
   name        = "$default"
   auto_deploy = true
-  # GAP-08: no access_log_settings. Learner expected to wire CloudWatch logs.
+
+  # GAP-08 remediated: access logs to a KMS-encrypted CloudWatch log group
+  # (grc_apigw_logging.tf).
+  access_log_settings {
+    destination_arn = aws_cloudwatch_log_group.apigw_access.arn
+    format = jsonencode({
+      requestId      = "$context.requestId"
+      ip             = "$context.identity.sourceIp"
+      requestTime    = "$context.requestTime"
+      httpMethod     = "$context.httpMethod"
+      routeKey       = "$context.routeKey"
+      status         = "$context.status"
+      protocol       = "$context.protocol"
+      responseLength = "$context.responseLength"
+      userAgent      = "$context.identity.userAgent"
+    })
+  }
+
+  # GAP-08 remediated: default route throttling caps burst + steady-state
+  # request rates so a misbehaving client can't exhaust downstream services.
+  default_route_settings {
+    throttling_burst_limit = 100
+    throttling_rate_limit  = 50
+  }
 }
 
 resource "aws_lambda_permission" "apigw" {
