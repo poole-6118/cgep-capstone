@@ -3,7 +3,7 @@
 **Author:** Joe Poole
 **Submission date:** 2026-08-05 (Day 1 — all four layers built and Layer 1 deployed same-day)
 **Repo:** [`github.com/poole-6118/cgep-capstone`](https://github.com/poole-6118/cgep-capstone)
-**Grading commit SHA:** `5df6bb3e2d0a72e18b66d0fd9514190cd89ba916` (head of `main` after PR #5 merge; the first commit that produced a fully signed evidence bundle end-to-end through the GHA pipeline). Any later commit on `main` also has a fresh signed bundle in the vault under `evidence/<sha>/`; grade against whichever SHA is at HEAD when reviewed.
+**Grading commit SHA:** `4841def957cbaf0f56fa5f6e4f6d20868da0efca` (current head of `main`). Every merge to `main` produces a fresh Cosign-signed evidence bundle in the vault under `evidence/<sha>/`; grade against whichever SHA is at HEAD when reviewed. Earlier bundles that also verify: `c04f9153252f1bea6b77dd699212d2f8248d893e` (post-writeup), `5df6bb3e2d0a72e18b66d0fd9514190cd89ba916` (first end-to-end).
 
 ---
 
