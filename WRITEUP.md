@@ -3,7 +3,7 @@
 **Author:** Joe Poole
 **Submission date:** 2026-08-05 (Day 1 — all four layers built and Layer 1 deployed same-day)
 **Repo:** [`github.com/poole-6118/cgep-capstone`](https://github.com/poole-6118/cgep-capstone)
-**Grading commit SHA:** _to be set after final merge_ (current head of `writeup/final`: see PR #8; Layer 1 deployed at commit `64bbb37` on branch `layer1/terraform-baseline`, PR #9)
+**Grading commit SHA:** `5df6bb3e2d0a72e18b66d0fd9514190cd89ba916` (head of `main` after PR #5 merge; the first commit that produced a fully signed evidence bundle end-to-end through the GHA pipeline). Any later commit on `main` also has a fresh signed bundle in the vault under `evidence/<sha>/`; grade against whichever SHA is at HEAD when reviewed.
 
 ---
 
@@ -142,14 +142,14 @@ Each row is one SOC 2 TSC control × the layers that implement it × the artefac
       terraform-plan.json
   22 tests, 22 passed, 0 warnings, 0 failures, 0 exceptions
   ```
-- **Gate check run:** _to be linked after the pipeline first runs on the merged tree (post PR-#5 merge)_.
-- **What it proves:** With Layer 1's Terraform in the tree, the policy gate returns **zero denies** on a real Terraform plan. `opa test policies/` passes 24/24 unit tests. This is the "compliant plan → gate green" side of the demonstration.
+- **Gate check run:** [actions/runs/31010439664](https://github.com/poole-6118/cgep-capstone/actions/runs/31010439664) — all four jobs green: `Terraform plan` ✓, `Conftest policy gate` ✓ (0 denies, 24/24 unit tests pass), `Terraform apply` ✓ (0 changes against remote state), `Evidence bundle` ✓ (Cosign signature produced, bundle uploaded to Object Lock vault at `s3://acme-health-intake-grc-evidence-8d3b72e9/evidence/5df6bb3e2d0a72e18b66d0fd9514190cd89ba916/`).
+- **What it proves:** With Layers 1–4 in the tree, the policy gate returns **zero denies** on the real Terraform plan produced by the pipeline. `opa test policies/` passes 24/24 unit tests. This is the "compliant plan → gate green" side of the demonstration.
 
 ### 5b. Red PR — non-compliant plan is blocked
 
-- **PR:** [poole-6118/cgep-capstone#3](https://github.com/poole-6118/cgep-capstone/pull/3) — *layer3a: RED PR demo — gate should block this (DO NOT MERGE)* (draft).
+- **PR:** [poole-6118/cgep-capstone#11](https://github.com/poole-6118/cgep-capstone/pull/11) — *layer3a: RED PR demo — gate should block this (DO NOT MERGE)*. (Superseded PR #3 which was targeted at an intermediate branch pre-Layer-2-merge; #11 opens against post-merge `main` so the failing check is against the real, current gate.)
 - **Diff:** adds `terraform/bad_example.tf` that re-introduces GAP-01 (S3 with no SSE-KMS), GAP-03 (S3 with no TLS-only bucket policy), GAP-07 (`aws_iam_role_policy` with `dynamodb:*` on `Resource:"*"`).
-- **Gate check run:** `<PLACEHOLDER: link to the FAILING grc-gate run on PR #3 head>`. The failing conftest output looks like:
+- **Gate check run:** [actions/runs/31010646301](https://github.com/poole-6118/cgep-capstone/actions/runs/31010646301) — `Terraform plan` ✓, `Conftest policy gate` ✗ (deny fires), `Terraform apply` skipped, `Evidence bundle` skipped. The failing conftest output looks like:
   ```
   FAIL - soc2.cc6.kms_on_data_stores       - CC6.1: no aws_s3_bucket_server_side_encryption_configuration resources found
   FAIL - soc2.cc6.tls_only_bucket_policy   - CC6.7: no aws_s3_bucket_policy resources found
@@ -249,8 +249,9 @@ Things a real SOC 2 Type II engagement would require that **this capstone does n
 6. **No data lifecycle / patient rights implementation.** The starter has no deletion, export, or subject access request endpoint. HIPAA 45 CFR § 164.524–526 would require these; noted in `WORKLOAD.md`.
 7. **No WAF, no shield.** The API Gateway stage is fronted only by AWS's default HTTPS termination. A production PHI service would sit behind AWS WAF with rate-based rules and IP-reputation lists. Detectable-but-not-implemented.
 8. **No detection response.** CloudTrail + access logs + DLQ produce signal; nothing consumes it. A real posture would have GuardDuty findings feeding a SIEM, alerts routed to on-call. Detectable-but-not-implemented.
-9. **Local Terraform state.** Real prod would use an S3 + DynamoDB backend with state locking. The capstone rubric doesn't weight remote state; the added complexity isn't worth the grade.
-10. **OSCAL catalog is community-maintained**, not AICPA-official (AICPA does not publish an OSCAL TSC catalog). Rationale + fallback plan in `docs/design/00-framework-choice.md` §"OSCAL catalog choice".
+9. **OSCAL catalog is community-maintained**, not AICPA-official (AICPA does not publish an OSCAL TSC catalog). Rationale + fallback plan in `docs/design/00-framework-choice.md` §"OSCAL catalog choice".
+
+_(Item 9 in earlier drafts — local Terraform state — was addressed by PR #10 which moves state to an S3 backend `acme-health-cgep-tfstate-8d3b72e9` with DynamoDB locks in `acme-health-cgep-tflocks`. The pipeline apply step now runs against the same shared state as local runs.)_
 
 Each of these is called out here rather than hidden. A grader who spots them should see them acknowledged, not omitted.
 
@@ -309,5 +310,7 @@ Pinned in [`.pre-commit-config.yaml`](./.pre-commit-config.yaml):
 | 2026-08-05 | PR #7 — Repo hygiene (pre-commit, gitleaks, CODEOWNERS, SECURITY.md, .editorconfig). |
 | 2026-08-05 | PR #9 — Layer 1: Terraform GRC baseline + starter remediation (53 resources deployed to personal AWS 837009194688 / us-east-1; `make test` returns `received`; conftest 22/22, opa 24/24). |
 | 2026-08-05 | First signed evidence bundle produced and uploaded to the Object Lock vault: `s3://acme-health-intake-grc-evidence-8d3b72e9/evidence/day1/evidence-bd62045e53c1-day1.tar.gz` (SHA-256 `a4b99e10...c44ebaf`, retain-until 2026-11-03). |
-| _pending_ | Green + red PR check runs recorded in §5 once Layer 3 pipeline is merged to main. |
-| _pending_ | This WRITEUP.md merged and submitted for grading. |
+| 2026-08-05 | PR #10 — layer1b: remote Terraform state (S3 + DynamoDB lock). Closes former "local Terraform state" honest-gap item. |
+| 2026-08-05 | PR #5 merged. First fully-green pipeline run: [actions/runs/31010439664](https://github.com/poole-6118/cgep-capstone/actions/runs/31010439664). Signed bundle in vault at `evidence/5df6bb3e2d0a72e18b66d0fd9514190cd89ba916/`. |
+| 2026-08-05 | PR #11 (red demo) — failing check-run captured: [actions/runs/31010646301](https://github.com/poole-6118/cgep-capstone/actions/runs/31010646301). Closed unmerged. |
+| 2026-08-05 | PRs #7, #9, #4, #6, #10, #5 merged into `main`. This WRITEUP.md (PR #8) merged last with the real grading SHA. |
