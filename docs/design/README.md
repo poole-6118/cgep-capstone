@@ -6,5 +6,6 @@ Small architecture-decision-record-style docs describing the *why* of each capst
 |---|---|---|
 | 00 | [`00-framework-choice.md`](./00-framework-choice.md) | Why SOC 2 Type II is the primary framework. |
 | 01 | [`01-capstone-plan.md`](./01-capstone-plan.md) | Build sequence, rubric-to-work mapping, timeline. |
+| 02 | [`02-starter-baseline.md`](./02-starter-baseline.md) | Starter deploys clean; smoke test passes; destroy is clean. |
 
 Additional docs land here as decisions get made (Layer 1 KMS key structure, Layer 3 Cosign key strategy, etc.).
