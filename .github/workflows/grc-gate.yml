@@ -1,0 +1,353 @@
+name: grc-gate
+run-name: GRC evidence gate — ${{ github.event_name }} on ${{ github.ref_name }}
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# OIDC token for AWS federation + Cosign keyless signing.
+# `contents: read` is the minimum for a private repo; we don't grant write.
+permissions:
+  id-token: write
+  contents: read
+
+# Prevent overlapping runs on the same PR/branch from clobbering each
+# other's evidence artefacts.
+concurrency:
+  group: grc-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+# All tool versions pinned. Bump these together with the actions SHAs
+# on rotation days. See .github/workflows/README.md.
+env:
+  AWS_REGION: us-east-1
+  TF_VERSION: 1.9.8
+  CONFTEST_VERSION: 0.68.2
+  OPA_VERSION: 1.15.2
+  COSIGN_VERSION: v2.5.3
+  EVIDENCE_BUCKET: ${{ secrets.EVIDENCE_BUCKET }}   # e.g., acme-health-evidence-vault-<suffix>
+
+jobs:
+  # --------------------------------------------------------------------
+  # plan — checkout, format, validate, plan → upload plan.json
+  # --------------------------------------------------------------------
+  plan:
+    name: Terraform plan
+    runs-on: ubuntu-24.04
+    outputs:
+      plan_sha: ${{ steps.hash.outputs.plan_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Configure AWS credentials (OIDC)
+        # Federated role assumption — no long-lived keys. The IAM role
+        # AWS_ROLE_ARN must trust this repo's OIDC subject
+        # (repo:poole-6118/cgep-capstone:ref:refs/heads/main and PR envs).
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: grc-gate-plan-${{ github.run_id }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: terraform fmt (check-only)
+        working-directory: terraform
+        run: terraform fmt -check -recursive
+
+      - name: terraform init
+        working-directory: terraform
+        run: terraform init -input=false -no-color
+
+      - name: terraform validate
+        working-directory: terraform
+        run: terraform validate -no-color
+
+      - name: terraform plan
+        working-directory: terraform
+        run: |
+          terraform plan -input=false -no-color -out=plan.tfplan
+          terraform show -json plan.tfplan > plan.json
+
+      - name: Compute plan hash
+        id: hash
+        working-directory: terraform
+        run: |
+          sha=$(sha256sum plan.json | cut -d' ' -f1)
+          echo "plan_sha=${sha}" >> "$GITHUB_OUTPUT"
+          echo "plan.json sha256: ${sha}"
+
+      - name: Upload plan artefact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tfplan-${{ github.run_id }}
+          path: |
+            terraform/plan.tfplan
+            terraform/plan.json
+          if-no-files-found: error
+          retention-days: 14
+
+  # --------------------------------------------------------------------
+  # policy-gate — Conftest against the Rego suite. Fails closed.
+  # --------------------------------------------------------------------
+  policy-gate:
+    name: Conftest policy gate
+    needs: [plan]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download plan artefact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: tfplan-${{ github.run_id }}
+          path: terraform/
+
+      - name: Install conftest
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/conftest.tgz \
+            "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz"
+          tar -xzf /tmp/conftest.tgz -C /tmp
+          sudo mv /tmp/conftest /usr/local/bin/conftest
+          conftest --version
+
+      - name: Install opa (for policy unit tests)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/opa \
+            "https://github.com/open-policy-agent/opa/releases/download/v${OPA_VERSION}/opa_linux_amd64"
+          chmod +x /tmp/opa
+          sudo mv /tmp/opa /usr/local/bin/opa
+          opa version
+
+      - name: Policy unit tests (positive + negative fixtures)
+        run: opa test policies/ -v
+
+      - name: Conftest gate against terraform/plan.json
+        run: |
+          set -euo pipefail
+          conftest test \
+            --all-namespaces \
+            --parser json \
+            --policy policies/ \
+            --output stdout \
+            terraform/plan.json | tee terraform/policy-results.txt
+          echo "conftest exit=$?"
+
+      - name: Also emit machine-readable JSON results
+        if: always()
+        run: |
+          conftest test \
+            --all-namespaces \
+            --parser json \
+            --policy policies/ \
+            --output json \
+            terraform/plan.json > terraform/policy-results.json || true
+
+      - name: Upload policy results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: policy-results-${{ github.run_id }}
+          path: |
+            terraform/policy-results.txt
+            terraform/policy-results.json
+          retention-days: 14
+
+  # --------------------------------------------------------------------
+  # apply — only on push to main, after the gate has passed.
+  # --------------------------------------------------------------------
+  apply:
+    name: Terraform apply
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [plan, policy-gate]
+    runs-on: ubuntu-24.04
+    outputs:
+      state_summary_sha: ${{ steps.summarize.outputs.state_summary_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: grc-gate-apply-${{ github.run_id }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Download plan artefact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: tfplan-${{ github.run_id }}
+          path: terraform/
+
+      - name: terraform init
+        working-directory: terraform
+        run: terraform init -input=false -no-color
+
+      - name: terraform apply
+        working-directory: terraform
+        run: terraform apply -input=false -no-color -auto-approve plan.tfplan
+
+      - name: Summarize state
+        id: summarize
+        working-directory: terraform
+        run: |
+          set -euo pipefail
+          terraform show -json > state.json
+          jq '{
+            resources: [.values.root_module.resources[]? | {address, type, name, mode}],
+            child_modules: [.values.root_module.child_modules[]? | .resources[]? | {address, type, name, mode}]
+          }' state.json > state-summary.json
+          sha=$(sha256sum state-summary.json | cut -d' ' -f1)
+          echo "state_summary_sha=${sha}" >> "$GITHUB_OUTPUT"
+          echo "state-summary.json sha256: ${sha}"
+
+      - name: Upload state summary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: state-summary-${{ github.run_id }}
+          path: terraform/state-summary.json
+          retention-days: 14
+
+  # --------------------------------------------------------------------
+  # evidence — sign the bundle (Cosign keyless) and upload to the vault.
+  # --------------------------------------------------------------------
+  evidence:
+    name: Evidence bundle (Cosign keyless + Object Lock vault)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [apply, policy-gate]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: grc-gate-evidence-${{ github.run_id }}
+
+      - name: Download plan artefact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: tfplan-${{ github.run_id }}
+          path: bundle/
+
+      - name: Download state summary
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: state-summary-${{ github.run_id }}
+          path: bundle/
+
+      - name: Download policy results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: policy-results-${{ github.run_id }}
+          path: bundle/
+
+      - name: Assemble evidence bundle
+        id: bundle
+        run: |
+          set -euo pipefail
+          cd bundle
+          # Write a manifest that binds the git commit + run + timestamps.
+          cat > manifest.json <<EOF
+          {
+            "repo": "${{ github.repository }}",
+            "commit": "${{ github.sha }}",
+            "run_id": "${{ github.run_id }}",
+            "run_number": ${{ github.run_number }},
+            "workflow": "${{ github.workflow }}",
+            "ref": "${{ github.ref }}",
+            "actor": "${{ github.actor }}",
+            "generated_at_utc": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          }
+          EOF
+          # Bundle everything.
+          tar -czf ../evidence-${{ github.sha }}.tar.gz \
+            manifest.json \
+            plan.json \
+            state-summary.json \
+            policy-results.txt \
+            policy-results.json
+          cd ..
+          sha=$(sha256sum evidence-${{ github.sha }}.tar.gz | cut -d' ' -f1)
+          echo "bundle_sha=${sha}" >> "$GITHUB_OUTPUT"
+          echo "evidence bundle sha256: ${sha}"
+          ls -la evidence-${{ github.sha }}.tar.gz
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+
+      - name: Sign the bundle (Cosign keyless / GHA OIDC)
+        run: |
+          set -euo pipefail
+          cosign sign-blob \
+            --yes \
+            --oidc-issuer=https://token.actions.githubusercontent.com \
+            --output-signature evidence-${{ github.sha }}.tar.gz.sig \
+            --output-certificate evidence-${{ github.sha }}.tar.gz.cert \
+            evidence-${{ github.sha }}.tar.gz
+          echo "--- signature (base64, first 80) ---"
+          head -c 80 evidence-${{ github.sha }}.tar.gz.sig; echo
+
+      - name: Upload signed bundle to evidence vault
+        # The vault bucket policy REQUIRES an explicit x-amz-server-side-encryption
+        # header of aws:kms plus the specific evidence CMK. Default bucket encryption
+        # doesn't satisfy this because the deny checks the request header, not the
+        # resulting encryption state.
+        env:
+          EVIDENCE_KMS_KEY_ARN: arn:aws:kms:us-east-1:837009194688:key/401dec1f-c807-4268-bc59-98b7e936f58c
+        run: |
+          set -euo pipefail
+          : "${EVIDENCE_BUCKET:?EVIDENCE_BUCKET secret is required}"
+          prefix="evidence/${{ github.sha }}"
+          SSE=(--sse aws:kms --sse-kms-key-id "${EVIDENCE_KMS_KEY_ARN}")
+          aws s3 cp "${SSE[@]}" evidence-${{ github.sha }}.tar.gz       "s3://${EVIDENCE_BUCKET}/${prefix}/evidence.tar.gz"
+          aws s3 cp "${SSE[@]}" evidence-${{ github.sha }}.tar.gz.sig   "s3://${EVIDENCE_BUCKET}/${prefix}/evidence.tar.gz.sig"
+          aws s3 cp "${SSE[@]}" evidence-${{ github.sha }}.tar.gz.cert  "s3://${EVIDENCE_BUCKET}/${prefix}/evidence.tar.gz.cert"
+          # Small metadata pointer so an auditor can find the artefacts
+          # by commit SHA alone.
+          cat > pointer.json <<EOF
+          {
+            "commit": "${{ github.sha }}",
+            "run_id": "${{ github.run_id }}",
+            "artefacts": {
+              "bundle": "s3://${EVIDENCE_BUCKET}/${prefix}/evidence.tar.gz",
+              "signature": "s3://${EVIDENCE_BUCKET}/${prefix}/evidence.tar.gz.sig",
+              "certificate": "s3://${EVIDENCE_BUCKET}/${prefix}/evidence.tar.gz.cert"
+            },
+            "bundle_sha256": "${{ steps.bundle.outputs.bundle_sha }}"
+          }
+          EOF
+          aws s3 cp "${SSE[@]}" pointer.json "s3://${EVIDENCE_BUCKET}/${prefix}/pointer.json"
+
+      - name: Retain signed bundle as GHA artefact (grader convenience)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: evidence-${{ github.sha }}
+          path: |
+            evidence-${{ github.sha }}.tar.gz
+            evidence-${{ github.sha }}.tar.gz.sig
+            evidence-${{ github.sha }}.tar.gz.cert
+          retention-days: 90
