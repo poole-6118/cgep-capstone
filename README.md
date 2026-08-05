@@ -1,80 +1,107 @@
-# cgep-app-starter
+# CGE-P Capstone — Patient Intake API, governed for SOC 2 Type II
 
-> Patient Intake API for "Acme Health". The deliberately-flawed workload your **CGE-P capstone** wraps with GRC controls.
+Joe Poole's Certified GRC Engineer (Practitioner) capstone. Wraps the [`GRCEngClub/cgep-app-starter`](https://github.com/GRCEngClub/cgep-app-starter) Patient Intake API with the four CGE-P layers so the workload is audit-defensible against **SOC 2 Type II** as the primary framework.
 
-## What this is
+**Full write-up:** [`WRITEUP.md`](./WRITEUP.md) — framework choice, architecture, control coverage, pipeline demonstration, honest gaps, and BOM.
 
-A minimal AWS workload: VPC, Lambda, API Gateway, DynamoDB, S3. It ingests patient intake submissions over HTTPS. Think of it as a system you have just inherited from an engineering team and been asked to make audit-defensible.
+**Grading commit SHA:** any commit on `main`. Every merge produces a fresh signed evidence bundle in the vault under `evidence/<sha>/`. Head-of-`main` at time of review is what to grade.
 
-This repository ships **non-compliant on purpose**. Your job in the capstone is not to rewrite this app. Your job is to wrap it with the four CGE-P layers (Terraform GRC baseline, Rego policies, GitHub Actions evidence pipeline, OSCAL component) so the same workload becomes audit-defensible against HIPAA, SOC 2, and CMMC L2.
+---
 
-## The deploy gate
+## Grader verification (five minutes)
 
-If you cannot deploy this starter, you cannot pass the capstone. Real GRC engineers inherit working systems. Step zero is making the system run.
+Everything below runs read-only and needs no AWS credentials for the core proof (only `cosign` + `sha256sum` + a downloaded bundle).
+
+### 1. Layers exist in the repo
 
 ```bash
-git clone https://github.com/GRCEngClub/cgep-app-starter
-cd cgep-app-starter
-
-# Confirm you're authenticated to the right account:
-make creds AWS_PROFILE=<your-sandbox-profile>
-
-make deploy AWS_PROFILE=<your-sandbox-profile>
-make test    AWS_PROFILE=<your-sandbox-profile>
+git clone https://github.com/poole-6118/cgep-capstone && cd cgep-capstone
+ls terraform/grc_*.tf                                # Layer 1 — 8 files
+ls policies/soc2/*/*.rego | grep -v _test | wc -l    # Layer 2 — 6 policies
+ls .github/workflows/grc-gate.yml                    # Layer 3 — pipeline
+ls oscal/components/patient-intake-api.json          # Layer 4 — OSCAL
 ```
 
-> **AWS SSO note:** if your profile is SSO-based, Terraform's AWS provider can fail to read it directly with `failed to find SSO session section`. The Makefile's `eval $(aws configure export-credentials)` pattern handles this. If you're running `terraform` commands by hand, do the same export first.
+### 2. Policy suite passes its own unit tests
 
-Expected output of `make test`:
-
-```json
-{
-    "submission_id": "f1e3...",
-    "status": "received"
-}
+```bash
+opa test policies/       # PASS: 24/24
 ```
 
-When you're done exploring: `make destroy`.
+### 3. Green PR and red PR both visible
 
-## What you build on top
+- **Green** (all four jobs pass): [`grc-gate` run 31010439664](https://github.com/poole-6118/cgep-capstone/actions/runs/31010439664)
+- **Red** (policy gate blocks non-compliant plan): PR [#11](https://github.com/poole-6118/cgep-capstone/pull/11), [`grc-gate` run 31010646301](https://github.com/poole-6118/cgep-capstone/actions/runs/31010646301). Closed unmerged, as designed.
 
-Fork the repo into your own `cgep-capstone` and add:
+### 4. Verify a signed evidence bundle end-to-end
 
-1. **Layer 1 — GRC baseline (Terraform).** KMS keys, an S3 evidence vault with Object Lock, a CloudTrail trail. Bring this starter's data stores under your CMK.
-2. **Layer 2 — OPA policy suite (Rego).** Five or more policies that catch the named gaps in [GAPS.md](GAPS.md). Each policy maps to at least one control from the framework you choose.
-3. **Layer 3 — GitHub Actions pipeline.** Plan → Conftest gate → apply → Cosign sign → upload to vault.
-4. **Layer 4 — OSCAL component.** A `component-definition.json` describing how your governed system implements its controls.
+Bundles are named by commit SHA. This example uses the writeup-merge SHA `c04f9153252f1bea6b77dd699212d2f8248d893e`.
 
-Full brief: `docs/labs/07_01_capstone_brief.md` in the course content repo.
+```bash
+mkdir verify && cd verify
+SHA=c04f9153252f1bea6b77dd699212d2f8248d893e
+BUCKET=acme-health-intake-grc-evidence-8d3b72e9
 
-## Framework mapping is required
+aws s3 cp "s3://${BUCKET}/evidence/${SHA}/" . --recursive
+# → evidence.tar.gz, evidence.tar.gz.sig, evidence.tar.gz.cert, pointer.json
 
-Your capstone must declare a primary framework: **HIPAA Security Rule**, **SOC 2 Trust Services Criteria**, or **CMMC Level 2**. Every policy carries at least one control ID from your chosen framework. Your OSCAL component's `control-implementations` reference your framework's catalog.
+# (a) SHA-256 matches the pointer.
+computed=$(sha256sum evidence.tar.gz | cut -d' ' -f1)
+recorded=$(jq -r .bundle_sha256 pointer.json)
+[ "$computed" = "$recorded" ] && echo "sha256 OK"
 
-A starter mapping is in [FRAMEWORKS.md](FRAMEWORKS.md). It is not the only valid mapping. You're expected to defend yours.
+# (b) Cosign keyless signature verifies against Sigstore.
+cosign verify-blob \
+  --certificate evidence.tar.gz.cert \
+  --signature   evidence.tar.gz.sig \
+  --certificate-identity-regexp 'https://github\.com/poole-6118/cgep-capstone/.*' \
+  --certificate-oidc-issuer     https://token.actions.githubusercontent.com \
+  evidence.tar.gz
+# → "Verified OK"
 
-## Cost
+# (c) Object Lock retention holds.
+aws s3api get-object-retention --bucket "${BUCKET}" \
+  --key "evidence/${SHA}/evidence.tar.gz"
+# → GOVERNANCE mode, retain-until ~90 days out
+```
 
-Roughly $0 if destroyed within an hour. Lambda + API Gateway + DynamoDB + S3 are all pay-per-use, and an empty deployment generates no traffic. CloudTrail (which you add) costs cents.
+The bundle contents (once extracted with `tar -xzf evidence.tar.gz`) include the Terraform plan JSON, a filtered state summary, `manifest.json` binding to the commit SHA, and the machine-readable `policy-results.json` from the Conftest run that gated the merge.
+
+### 5. OSCAL validates with `trestle`
+
+```bash
+pip install compliance-trestle
+mkdir trestle-check && cd trestle-check && trestle init
+mkdir -p component-definitions/patient-intake-api profiles/capstone-profile
+cp ../oscal/components/patient-intake-api.json component-definitions/patient-intake-api/component-definition.json
+cp ../oscal/profiles/capstone-profile.json     profiles/capstone-profile/profile.json
+trestle validate -a
+# → VALID: both models
+```
+
+---
 
 ## Layout
 
 ```
-cgep-app-starter/
-├── README.md            # this file
-├── WORKLOAD.md          # what the API does
-├── GAPS.md              # the named flaws your policies must catch
-├── FRAMEWORKS.md        # HIPAA / SOC 2 / CMMC mapping primer
-├── Makefile             # make deploy | test | destroy
-├── terraform/
-│   ├── main.tf
-│   ├── variables.tf
-│   ├── outputs.tf
-│   └── lambda/handler.py
-└── test/
-    └── intake.sh
+cgep-capstone/
+├── README.md                # this file
+├── WRITEUP.md               # full submission narrative (~450 lines)
+├── FRAMEWORKS.md            # starter's framework primer
+├── GAPS.md                  # the 8 named gaps the policy suite closes
+├── WORKLOAD.md              # what the API does
+├── Makefile                 # make deploy | test | destroy
+├── docs/design/             # ADRs: framework choice, plan, TF structure
+├── terraform/               # Layer 1 — starter + GRC overlay (grc_*.tf)
+├── policies/soc2/           # Layer 2 — 6 Rego policies, 24 unit tests
+├── .github/workflows/       # Layer 3 — grc-gate.yml
+└── oscal/                   # Layer 4 — component + profile
 ```
 
-## License
+---
 
-MIT. Fork freely. Submissions remain learners' own work.
+## Attribution
+
+Starter code and framework primer are from [`GRCEngClub/cgep-app-starter`](https://github.com/GRCEngClub/cgep-app-starter). Every additional file, policy, workflow, and OSCAL artefact in this repository was authored for this capstone submission and is signed with Cosign keyless per merge.
+
+License follows the starter: MIT.

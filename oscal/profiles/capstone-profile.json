@@ -9,6 +9,9 @@
       "oscal-version": "1.1.2",
       "roles": [
         { "id": "grc-engineer", "title": "GRC Engineer" }
+      ],
+      "links": [
+        { "href": "#84c8bbc8-2fa0-4432-b039-c7c7d290ce52", "rel": "reference", "text": "SOC 2 TSC catalog (pin)" }
       ]
     },
     "imports": [

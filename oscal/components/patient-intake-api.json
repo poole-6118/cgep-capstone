@@ -70,6 +70,11 @@
               { "name": "catalog-version", "value": "2022" },
               { "name": "catalog-pin",     "value": "grcwarlock/oscal-catalog-library@ea49c4c05c8c62098b3766fd8f26b862fb5181f4" }
             ],
+            "links": [
+              { "href": "#c9a7a0f1-7948-4eca-8004-b6ca0c9eea10", "rel": "reference", "text": "SOC 2 TSC OSCAL catalog (pinned)" },
+              { "href": "#d69caee5-f6a6-4bcf-aaf4-ff126d73fca4", "rel": "reference", "text": "Capstone framework choice" },
+              { "href": "#521f3988-eaca-4503-ad53-25dd592d7c35", "rel": "reference", "text": "Capstone build plan" }
+            ],
             "implemented-requirements": [
               {
                 "uuid": "ddde187f-7921-42f9-92f5-7a1310a6fe55",
@@ -87,7 +92,7 @@
                 "links": [
                   { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/terraform/main.tf",                                  "rel": "implementation", "text": "Terraform: aws_dynamodb_table.intake, aws_s3_bucket.uploads" },
                   { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/policies/soc2/cc6/kms_on_data_stores.rego",           "rel": "test",           "text": "Rego policy" },
-                  { "href": "s3://acme-health-evidence-vault-<suffix>/evidence/<commit-sha>/evidence.tar.gz",                            "rel": "evidence",       "text": "Signed evidence bundle (per-merge)" }
+                  { "href": "s3://acme-health-intake-grc-evidence-8d3b72e9/evidence/<commit-sha>/evidence.tar.gz",                            "rel": "evidence",       "text": "Signed evidence bundle (per-merge)" }
                 ]
               },
               {
@@ -105,7 +110,7 @@
                 "links": [
                   { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/terraform/main.tf",                              "rel": "implementation", "text": "Terraform: aws_iam_role_policy.lambda_inline" },
                   { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/policies/soc2/cc6/least_priv_iam.rego",           "rel": "test",           "text": "Rego policy" },
-                  { "href": "s3://acme-health-evidence-vault-<suffix>/evidence/<commit-sha>/evidence.tar.gz",                       "rel": "evidence",       "text": "Signed evidence bundle" }
+                  { "href": "s3://acme-health-intake-grc-evidence-8d3b72e9/evidence/<commit-sha>/evidence.tar.gz",                       "rel": "evidence",       "text": "Signed evidence bundle" }
                 ]
               },
               {
@@ -123,7 +128,7 @@
                 "links": [
                   { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/terraform/main.tf",                          "rel": "implementation", "text": "Terraform: aws_lambda_function.intake vpc_config" },
                   { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/policies/soc2/cc6/lambda_in_vpc.rego",       "rel": "test",           "text": "Rego policy" },
-                  { "href": "s3://acme-health-evidence-vault-<suffix>/evidence/<commit-sha>/evidence.tar.gz",                   "rel": "evidence",       "text": "Signed evidence bundle" }
+                  { "href": "s3://acme-health-intake-grc-evidence-8d3b72e9/evidence/<commit-sha>/evidence.tar.gz",                   "rel": "evidence",       "text": "Signed evidence bundle" }
                 ]
               },
               {
@@ -140,7 +145,7 @@
                 "links": [
                   { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/terraform/main.tf",                                  "rel": "implementation", "text": "Terraform: aws_s3_bucket_policy.uploads_tls_only" },
                   { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/policies/soc2/cc6/tls_only_bucket_policy.rego",       "rel": "test",           "text": "Rego policy" },
-                  { "href": "s3://acme-health-evidence-vault-<suffix>/evidence/<commit-sha>/evidence.tar.gz",                            "rel": "evidence",       "text": "Signed evidence bundle" }
+                  { "href": "s3://acme-health-intake-grc-evidence-8d3b72e9/evidence/<commit-sha>/evidence.tar.gz",                            "rel": "evidence",       "text": "Signed evidence bundle" }
                 ]
               },
               {
@@ -160,7 +165,7 @@
                 "links": [
                   { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/terraform/main.tf",                                  "rel": "implementation", "text": "Terraform: aws_cloudtrail.governance, aws_apigatewayv2_stage.default, aws_lambda_function.intake" },
                   { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/policies/soc2/cc7/detection_enabled.rego",           "rel": "test",           "text": "Rego policy" },
-                  { "href": "s3://acme-health-evidence-vault-<suffix>/evidence/<commit-sha>/evidence.tar.gz",                          "rel": "evidence",       "text": "Signed evidence bundle" }
+                  { "href": "s3://acme-health-intake-grc-evidence-8d3b72e9/evidence/<commit-sha>/evidence.tar.gz",                          "rel": "evidence",       "text": "Signed evidence bundle" }
                 ]
               },
               {
@@ -176,8 +181,8 @@
                 "links": [
                   { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/.github/workflows/grc-gate.yml", "rel": "implementation", "text": "GHA workflow: grc-gate" },
                   { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/policies/",                     "rel": "test",           "text": "Rego policy suite (all controls)" },
-                  { "href": "s3://acme-health-evidence-vault-<suffix>/evidence/<commit-sha>/evidence.tar.gz",     "rel": "evidence",       "text": "Signed evidence bundle" },
-                  { "href": "s3://acme-health-evidence-vault-<suffix>/evidence/<commit-sha>/pointer.json",       "rel": "evidence",       "text": "Evidence bundle pointer (commit \u2192 S3 URIs)" }
+                  { "href": "s3://acme-health-intake-grc-evidence-8d3b72e9/evidence/<commit-sha>/evidence.tar.gz",     "rel": "evidence",       "text": "Signed evidence bundle" },
+                  { "href": "s3://acme-health-intake-grc-evidence-8d3b72e9/evidence/<commit-sha>/pointer.json",       "rel": "evidence",       "text": "Evidence bundle pointer (commit \u2192 S3 URIs)" }
                 ]
               },
               {
@@ -194,7 +199,7 @@
                 "links": [
                   { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/terraform/grc_evidence.tf",                             "rel": "implementation", "text": "Terraform: evidence vault (versioning + Object Lock)" },
                   { "href": "https://github.com/poole-6118/cgep-capstone/blob/main/policies/soc2/a1/object_lock_and_versioning.rego",       "rel": "test",           "text": "Rego policy" },
-                  { "href": "s3://acme-health-evidence-vault-<suffix>/evidence/<commit-sha>/evidence.tar.gz",                              "rel": "evidence",       "text": "Signed evidence bundle" }
+                  { "href": "s3://acme-health-intake-grc-evidence-8d3b72e9/evidence/<commit-sha>/evidence.tar.gz",                              "rel": "evidence",       "text": "Signed evidence bundle" }
                 ]
               }
             ]
