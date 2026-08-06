@@ -342,6 +342,119 @@ jobs:
           EOF
           aws s3 cp "${SSE[@]}" pointer.json "s3://${EVIDENCE_BUCKET}/${prefix}/pointer.json"
 
+      # ------------------------------------------------------------------
+      # Vault-side attestation.
+      #
+      # After the bundle is in the Object Lock vault, query the vault for
+      # HeadObject + GetObjectRetention on the just-uploaded object and
+      # snapshot the response into vault-attestation.json. Then sign that
+      # attestation *separately* with Cosign so an auditor with only public
+      # GitHub + Sigstore access can verify:
+      #   1. The bundle landed in the intended bucket/prefix.
+      #   2. The bucket has Object Lock enabled in GOVERNANCE mode with a
+      #      retain-until date ~90 days out.
+      #   3. The object was SSE-KMS encrypted with the expected CMK.
+      #   4. The attestation itself was produced by *this* workflow run
+      #      (identity binding via the Cosign certificate).
+      #
+      # The attestation JSON is included in the GHA artefact and also
+      # uploaded to the vault under evidence/<sha>/vault-attestation.json.
+      # ------------------------------------------------------------------
+      - name: Attest vault-side state (Object Lock, SSE-KMS, versioning)
+        id: attest
+        env:
+          EVIDENCE_KMS_KEY_ARN: arn:aws:kms:us-east-1:837009194688:key/401dec1f-c807-4268-bc59-98b7e936f58c
+        run: |
+          set -euo pipefail
+          : "${EVIDENCE_BUCKET:?EVIDENCE_BUCKET secret is required}"
+          prefix="evidence/${{ github.sha }}"
+          key="${prefix}/evidence.tar.gz"
+
+          head=$(aws s3api head-object --bucket "${EVIDENCE_BUCKET}" --key "${key}")
+          retention=$(aws s3api get-object-retention --bucket "${EVIDENCE_BUCKET}" --key "${key}")
+          bucket_versioning=$(aws s3api get-bucket-versioning --bucket "${EVIDENCE_BUCKET}")
+          bucket_object_lock=$(aws s3api get-object-lock-configuration --bucket "${EVIDENCE_BUCKET}")
+
+          jq -n \
+            --arg   repo          "${{ github.repository }}" \
+            --arg   commit        "${{ github.sha }}" \
+            --arg   run_id        "${{ github.run_id }}" \
+            --arg   run_url       "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --arg   attested_at   "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg   bucket        "${EVIDENCE_BUCKET}" \
+            --arg   key           "${key}" \
+            --arg   region        "${AWS_REGION}" \
+            --arg   bundle_sha    "${{ steps.bundle.outputs.bundle_sha }}" \
+            --arg   kms_key_arn   "${EVIDENCE_KMS_KEY_ARN}" \
+            --argjson head           "${head}" \
+            --argjson retention      "${retention}" \
+            --argjson versioning     "${bucket_versioning}" \
+            --argjson object_lock    "${bucket_object_lock}" \
+            '{
+              schema: "cgep-capstone.vault-attestation.v1",
+              attested_at_utc: $attested_at,
+              provenance: {
+                repo: $repo, commit: $commit, run_id: $run_id, run_url: $run_url
+              },
+              vault: {
+                bucket: $bucket, key: $key, region: $region,
+                expected_kms_key_arn: $kms_key_arn
+              },
+              bundle: {
+                sha256: $bundle_sha,
+                s3_uri: ("s3://" + $bucket + "/" + $key)
+              },
+              object: {
+                content_length:     $head.ContentLength,
+                etag:               $head.ETag,
+                version_id:         $head.VersionId,
+                sse:                $head.ServerSideEncryption,
+                sse_kms_key_id:     $head.SSEKMSKeyId,
+                object_lock_mode:            $head.ObjectLockMode,
+                object_lock_retain_until:    $head.ObjectLockRetainUntilDate
+              },
+              object_retention:   $retention.Retention,
+              bucket_versioning:  $versioning,
+              bucket_object_lock: $object_lock.ObjectLockConfiguration
+            }' > vault-attestation.json
+
+          echo "--- vault-attestation.json ---"
+          cat vault-attestation.json
+
+          # Sanity: attestation must show Object Lock GOVERNANCE + KMS with expected CMK.
+          mode=$(jq -r '.object.object_lock_mode' vault-attestation.json)
+          sse=$(jq -r '.object.sse' vault-attestation.json)
+          key=$(jq -r '.object.sse_kms_key_id' vault-attestation.json)
+          [ "$mode" = "GOVERNANCE" ]                       || { echo "FAIL: object not under GOVERNANCE Object Lock (got: $mode)"; exit 1; }
+          [ "$sse" = "aws:kms" ]                            || { echo "FAIL: object not SSE-KMS encrypted (got: $sse)"; exit 1; }
+          [ "$key" = "${EVIDENCE_KMS_KEY_ARN}" ]            || { echo "FAIL: wrong KMS CMK (got: $key)"; exit 1; }
+          echo "vault attestation: OK (Object Lock GOVERNANCE + SSE-KMS with expected CMK)"
+
+          sha=$(sha256sum vault-attestation.json | cut -d' ' -f1)
+          echo "attestation_sha=${sha}" >> "$GITHUB_OUTPUT"
+          echo "attestation sha256: ${sha}"
+
+      - name: Sign vault attestation (Cosign keyless / GHA OIDC)
+        run: |
+          set -euo pipefail
+          cosign sign-blob \
+            --yes \
+            --oidc-issuer=https://token.actions.githubusercontent.com \
+            --output-signature   vault-attestation.json.sig \
+            --output-certificate vault-attestation.json.cert \
+            vault-attestation.json
+
+      - name: Upload signed attestation to evidence vault
+        env:
+          EVIDENCE_KMS_KEY_ARN: arn:aws:kms:us-east-1:837009194688:key/401dec1f-c807-4268-bc59-98b7e936f58c
+        run: |
+          set -euo pipefail
+          prefix="evidence/${{ github.sha }}"
+          SSE=(--sse aws:kms --sse-kms-key-id "${EVIDENCE_KMS_KEY_ARN}")
+          aws s3 cp "${SSE[@]}" vault-attestation.json       "s3://${EVIDENCE_BUCKET}/${prefix}/vault-attestation.json"
+          aws s3 cp "${SSE[@]}" vault-attestation.json.sig   "s3://${EVIDENCE_BUCKET}/${prefix}/vault-attestation.json.sig"
+          aws s3 cp "${SSE[@]}" vault-attestation.json.cert  "s3://${EVIDENCE_BUCKET}/${prefix}/vault-attestation.json.cert"
+
       - name: Retain signed bundle as GHA artefact (grader convenience)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -350,4 +463,7 @@ jobs:
             evidence-${{ github.sha }}.tar.gz
             evidence-${{ github.sha }}.tar.gz.sig
             evidence-${{ github.sha }}.tar.gz.cert
+            vault-attestation.json
+            vault-attestation.json.sig
+            vault-attestation.json.cert
           retention-days: 90

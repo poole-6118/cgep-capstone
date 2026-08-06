@@ -230,23 +230,70 @@ jq '.[] | select(.failures | length > 0) | .failures[]' bundle-contents/policy-r
 # blocked the merge before this bundle was ever produced).
 ```
 
-### 6f. Object Lock retention (vault-side control)
+### 6f. Vault-side attestation (Object Lock, SSE-KMS, versioning)
 
-The grader-facing verification above needs no AWS access. For completeness, the vault-side retention control is implemented in [`terraform/grc_evidence_vault.tf`](./terraform/grc_evidence_vault.tf):
+Section 3 of the CGE-P deliverables spec asserts the bundle lives in an *S3 Object Lock vault* — not just "in S3." A grader with only public GitHub access cannot call `s3api get-object-retention` themselves. To close that gap without exposing the bucket publicly, the pipeline produces a **signed vault attestation** on every green run.
 
-- `aws_s3_bucket.grc_evidence.object_lock_enabled = true`
-- `aws_s3_bucket_object_lock_configuration.grc_evidence` sets a default rule of `mode = GOVERNANCE`, `days = 90`
-- Versioning is enabled (required precondition for Object Lock)
-- The bucket policy denies non-TLS access and denies uploads that don't specify `x-amz-server-side-encryption=aws:kms` with the evidence CMK
+**How it's produced.** After the `aws s3 cp` calls succeed, the *Attest vault-side state* step runs (in the same OIDC-federated session that just wrote the object):
 
-The pipeline's *Upload signed bundle to evidence vault* step exercises this on every merge — the `aws s3 cp` calls succeed only because the pipeline sets the exact SSE-KMS headers the bucket policy requires. From an account with read access to `837009194688`:
+1. `aws s3api head-object` on the just-uploaded `evidence.tar.gz` — returns SSE header, KMS key ID, Object Lock mode, retain-until date, ETag, version ID, content length.
+2. `aws s3api get-object-retention` on the same key — returns the retention record.
+3. `aws s3api get-bucket-versioning` — confirms the bucket has versioning enabled (Object Lock's precondition).
+4. `aws s3api get-object-lock-configuration` — returns the default retention rule (`GOVERNANCE`, 90 days).
+
+Those four responses are stitched into `vault-attestation.json` alongside the run's provenance (repo, commit SHA, run ID, run URL, timestamp). The step also enforces three assertions before it exits: `ObjectLockMode == GOVERNANCE`, `ServerSideEncryption == aws:kms`, and `SSEKMSKeyId == <evidence CMK ARN>`. If any assertion fails the pipeline fails and nothing more gets signed.
+
+`vault-attestation.json` is then signed with `cosign sign-blob` using the same GHA OIDC identity that signed the main bundle, and both the JSON and its signature/certificate are uploaded to the vault at `evidence/<sha>/vault-attestation.json{,.sig,.cert}` and published as part of the GHA artefact.
+
+**How a grader verifies it (no AWS credentials required).**
 
 ```bash
-aws s3api get-object-retention \
-  --bucket acme-health-intake-grc-evidence-8d3b72e9 \
-  --key evidence/<sha>/evidence.tar.gz
-# → { "Retention": { "Mode": "GOVERNANCE", "RetainUntilDate": "~90 days from upload" } }
+# Verify the attestation's Cosign signature.
+cosign verify-blob \
+  --certificate vault-attestation.json.cert \
+  --signature   vault-attestation.json.sig \
+  --certificate-identity-regexp 'https://github\.com/poole-6118/cgep-capstone/.*' \
+  --certificate-oidc-issuer     https://token.actions.githubusercontent.com \
+  vault-attestation.json
+# → "Verified OK"
+
+# Inspect the attested state.
+jq . vault-attestation.json
 ```
+
+Expected JSON (abbreviated):
+
+```jsonc
+{
+  "schema": "cgep-capstone.vault-attestation.v1",
+  "provenance": {
+    "repo":    "poole-6118/cgep-capstone",
+    "commit":  "<grading SHA>",
+    "run_id":  "<workflow run id>",
+    "run_url": "https://github.com/poole-6118/cgep-capstone/actions/runs/<id>"
+  },
+  "vault": {
+    "bucket": "acme-health-intake-grc-evidence-8d3b72e9",
+    "key":    "evidence/<sha>/evidence.tar.gz",
+    "region": "us-east-1",
+    "expected_kms_key_arn": "arn:aws:kms:us-east-1:837009194688:key/401dec1f-c807-4268-bc59-98b7e936f58c"
+  },
+  "object": {
+    "sse":                       "aws:kms",
+    "sse_kms_key_id":            "arn:aws:kms:us-east-1:837009194688:key/401dec1f-c807-4268-bc59-98b7e936f58c",
+    "object_lock_mode":          "GOVERNANCE",
+    "object_lock_retain_until":  "2026-11-..."
+  },
+  "object_retention":  { "Mode": "GOVERNANCE", "RetainUntilDate": "2026-11-..." },
+  "bucket_versioning": { "Status": "Enabled", "MFADelete": "Disabled" },
+  "bucket_object_lock": {
+    "ObjectLockEnabled": "Enabled",
+    "Rule": { "DefaultRetention": { "Mode": "GOVERNANCE", "Days": 90 } }
+  }
+}
+```
+
+**Why this is auditor-grade.** The Cosign signature on `vault-attestation.json` binds four things together: (1) *this repo's* workflow produced it (certificate identity), (2) the AWS API responses inside it were the real responses at attestation time (any post-hoc edit invalidates the signature), (3) the referenced object exists at the declared S3 key with the declared retention (`head-object` would have failed otherwise), and (4) the transparency log entry in Sigstore/Rekor makes any silent replacement detectable. The attestation is machine-checkable, replayable, and needs zero access to AWS to verify.
 
 ---
 

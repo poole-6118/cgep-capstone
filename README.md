@@ -38,7 +38,9 @@ opa test policies/       # PASS: 24/24
 **Grab the bundle from the latest green run** (no AWS access needed):
 
 1. Go to the [Actions tab](https://github.com/poole-6118/cgep-capstone/actions/workflows/grc-gate.yml?query=branch%3Amain+is%3Asuccess) and open the newest green run on `main`.
-2. Scroll to *Artifacts* and download `evidence-<sha>` — a zip containing `evidence-<sha>.tar.gz`, `evidence-<sha>.tar.gz.sig`, and `evidence-<sha>.tar.gz.cert`.
+2. Scroll to *Artifacts* and download `evidence-<sha>` — a zip containing:
+   - `evidence-<sha>.tar.gz` + `.sig` + `.cert` — the signed bundle itself
+   - `vault-attestation.json` + `.sig` + `.cert` — a signed statement of the vault-side state (Object Lock mode, retention date, SSE-KMS, versioning) captured *after* the bundle was uploaded to S3
 3. Unzip into a working directory.
 
 Then from that directory:
@@ -67,7 +69,31 @@ tar tzf evidence-${SHA}.tar.gz
 #    policy-results.txt, policy-results.json
 ```
 
-**Object Lock retention** on the vault side is declared in [`terraform/grc_evidence_vault.tf`](./terraform/grc_evidence_vault.tf) (`object_lock_enabled = true`, GOVERNANCE mode, 90-day retention rule) and its enforcement is what the pipeline's `Upload signed bundle to evidence vault` step exercises on every merge. The bundle is *also* uploaded to `s3://acme-health-intake-grc-evidence-8d3b72e9/evidence/<sha>/` under Object Lock — the pipeline log shows the successful `PutObject` calls with the required `x-amz-server-side-encryption=aws:kms` header. If you happen to have read access to AWS account `837009194688`, `aws s3api get-object-retention --bucket ... --key evidence/<sha>/evidence.tar.gz` will return `Mode: GOVERNANCE` with a retain-until date ~90 days out.
+**Object Lock retention proof** (no AWS access needed):
+
+```bash
+# Verify the signed vault attestation is authentic (same Sigstore chain as the bundle).
+cosign verify-blob \
+  --certificate vault-attestation.json.cert \
+  --signature   vault-attestation.json.sig \
+  --certificate-identity-regexp 'https://github\.com/poole-6118/cgep-capstone/.*' \
+  --certificate-oidc-issuer     https://token.actions.githubusercontent.com \
+  vault-attestation.json
+# → "Verified OK"
+
+# Read the attested vault state.
+jq '{ mode: .object.object_lock_mode,
+      retain_until: .object.object_lock_retain_until,
+      sse: .object.sse,
+      cmk: .object.sse_kms_key_id,
+      versioning: .bucket_versioning.Status,
+      object_lock_default: .bucket_object_lock.Rule.DefaultRetention }' \
+   vault-attestation.json
+# → GOVERNANCE mode, retain-until ~90 days out, aws:kms SSE with the
+#   expected CMK, bucket versioning Enabled, default retention 90 days.
+```
+
+The attestation is produced by the pipeline *after* it uploads the bundle to `s3://acme-health-intake-grc-evidence-8d3b72e9/evidence/<sha>/` — it calls `s3:HeadObject`, `s3:GetObjectRetention`, `s3:GetBucketVersioning`, and `s3:GetObjectLockConfiguration`, snapshots the responses to JSON, and Cosign-signs the file with the same OIDC identity that signed the bundle. If the JSON were tampered with, `cosign verify-blob` would fail. If it were signed outside this repo's workflow, the certificate would not match `certificate-identity-regexp`. The vault declaration itself lives in [`terraform/grc_evidence_vault.tf`](./terraform/grc_evidence_vault.tf).
 
 ### 5. OSCAL validates with `trestle`
 
